@@ -408,6 +408,34 @@ The self-test drives synthetic handwheel motion — an out-and-back sweep on X, 
 one-way Z move, buttons — and checks the DRO the sender reports back actually
 follows. It needs no encoder or display wired.
 
+### Jog behaviour — open question
+
+Two philosophies, and which feels right is a question for a real machine:
+
+- **Velocity-follow** (current default). Stopping the wheel flushes queued
+  motion and halts. The machine never runs on past your hand. Ten fast clicks
+  may travel less than ten steps' worth, because the remainder is cancelled.
+- **Queue-and-execute.** Every detent is honoured exactly, so ten clicks is
+  always ten steps. The machine lags a fast spin and keeps moving after you
+  stop.
+
+Velocity-follow is the default because a handwheel is used to position by eye —
+if you want an exact distance you would type it. Step size (the two step
+buttons) is the coarse/fine control, which may well cover the "spin fast for
+rough distance, crawl for fine" need without a second mode.
+
+Compare them on a running pendant without reflashing:
+
+```python
+scheduler.cancel_on_stop = False   # queue-and-execute
+scheduler.cancel_on_stop = True    # velocity-follow
+```
+
+The cancel threshold is `IDLE_MS_BEFORE_CANCEL`, 300 ms. It has to clear a slow
+turn: someone winding continuously still produces a detent every few hundred
+ms, and a shorter threshold fires between individual detents and truncates jogs
+mid-move.
+
 ### Verifying the decoder
 
 Decode logic runs on a PC with no board attached — it stubs `machine` and
