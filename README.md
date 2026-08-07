@@ -298,19 +298,43 @@ regardless of transport.
 
 ### Encoder wiring
 
-> **The RP2350 is not 5 V tolerant.** A 5 V handwheel can damage a GPIO. Check
-> which output type yours has before wiring it.
+> **The RP2350 is not 5 V tolerant.** A 5 V handwheel will damage a GPIO if
+> wired straight in. Identify the output type first.
 
-| Output type | How to tell | Wiring |
+Count the terminals:
+
+| Terminals | Type | Wiring |
 |---|---|---|
-| NPN open-collector (most common) | Floats when idle, no voltage until pulled up | A/B direct to GPIO with a **4.7 kΩ pull-up to 3.3 V** |
-| Push-pull / line driver | Actively drives ~5 V | Level shifter, or a 10 k/20 k divider (5 V × 20/30 = 3.33 V) |
+| **6** — A, B, 0V, Vcc, A-, B- | Differential **line driver**, push-pull, swings a full 0–5 V | Divider on A and B (below), or an RS-422 receiver |
+| 4 — A, B, 0V, Vcc | Single-ended; still need to know which kind | Open-collector: 4.7 kΩ pull-up to **3.3 V**. Push-pull: divider as below |
 
-Power the wheel from **VBUS** (pin 40, USB 5 V) and share ground with the Pico.
-With an external pull-up the input is actively driven high, which also keeps
-erratum E9 out of the picture — that latch-up needs a weak or floating pull-down.
+The wheel in use here is the 6-terminal line-driver type. Wiring:
+
+```
+  encoder A ──[10k]──┬──[20k]── GND        tap ──> GP2
+  encoder B ──[10k]──┬──[20k]── GND        tap ──> GP3
+  encoder 0V  ───────────────────────────────────> GND  (pin 38)
+  encoder Vcc ───────────────────────────────────> VBUS (pin 40, USB 5 V)
+```
+
+5 V × 20/(10+20) = 3.33 V. Two 10 k in series substitutes for the 20 k leg.
+RP2350's input-high threshold is around 2.15 V, so a 3.0 V divider result is
+also fine. No pull-ups — a line driver drives both rails itself.
+
+A- and B- go unused in this arrangement. They exist for noise immunity over a
+long cable; if `errors` starts climbing because the lead runs near a VFD or
+steppers, feed A/A- and B/B- into a 3.3 V RS-422 receiver (MAX3095 or similar)
+and take single-ended 3.3 V out. Not needed for a short bench lead.
+
+Erratum E9 is not a factor either way here, since the input is actively driven
+rather than resting on a weak pull-down.
 
 Defaults are GP2 = A, GP3 = B.
+
+**Check before connecting:** power the encoder from 5 V and GND only, and
+measure A against 0V while turning slowly. It should swing hard between ~0 V
+and ~5 V. If it never reaches 5 V unaided it is open-collector, not a line
+driver, and wants pull-ups instead of dividers.
 
 ### Verifying the decoder
 
