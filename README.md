@@ -1,0 +1,100 @@
+# Pico 2 W
+
+Experiments on a Raspberry Pi Pico 2 W (RP2350 + Infineon CYW43439).
+
+## Board notes
+
+| | |
+|---|---|
+| MCU | RP2350, dual Cortex-M33 @ 150 MHz **or** dual Hazard3 RISC-V |
+| RAM / flash | 520 KB SRAM / 4 MB QSPI |
+| PIO | 3 blocks, 12 state machines |
+| Radio | WiFi 4 (802.11n, 2.4 GHz) + Bluetooth 5.2 |
+| Power | 1.8-5.5 V into VSYS via onboard buck-boost |
+
+Three things that bite people on this specific board:
+
+- **The onboard LED is not a GPIO.** It hangs off the CYW43 radio chip, so it's
+  `Pin("LED")`, never `Pin(25)`. Most Pico tutorials assume a non-W board and
+  will silently do nothing.
+- **GP29 belongs to the WiFi SPI**, so the usable ADC channels are GP26/27/28
+  (channels 0-2). Channel 4 is the internal temperature sensor.
+- **Erratum RP2350-E9.** On the A2 stepping, an input pin can latch near 2.15 V
+  instead of reading low, and the internal pull-downs are too weak to fix it.
+  This hits PIO input programs too. Use an external pull-down of 8.2 kΩ or
+  smaller. Stepping A4 corrects it — worth checking which one your board has
+  before you spend an evening debugging a "broken" input.
+
+## Flashing MicroPython
+
+1. Download the Pico 2 W `.uf2` from
+   [micropython.org/download/RPI_PICO2_W](https://micropython.org/download/RPI_PICO2_W/)
+   (current release: **v1.28.0**). Make sure it's the `RPI_PICO2_W` build —
+   the plain `RPI_PICO2` build has no WiFi and the plain `RPI_PICO_W` build is
+   for the older RP2040 board.
+2. Hold **BOOTSEL** while plugging in USB. The board mounts as a drive named
+   `RP2350`.
+3. Copy the `.uf2` onto it. The board reboots into MicroPython automatically.
+
+If the board misbehaves after switching between Arm and RISC-V builds, or
+between MicroPython and C SDK firmware, flash `flash_nuke.uf2` first to wipe
+the flash, then reflash. Leftover filesystem blocks confuse the new firmware.
+
+## Running the smoke test
+
+Uses [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html):
+
+```bash
+pip install mpremote
+```
+
+Set up credentials (this file is gitignored — it never reaches a commit):
+
+```bash
+cp micropython/secrets.example.py micropython/secrets.py
+```
+
+Edit it, then copy it to the board and run the test:
+
+```bash
+mpremote connect auto fs cp micropython/secrets.py :secrets.py
+```
+
+```bash
+mpremote connect auto run micropython/smoke_test.py
+```
+
+`run` streams the script from your PC rather than installing it, but imports
+still resolve on the board — which is why `secrets.py` has to be copied over
+first. To drop into the REPL instead:
+
+```bash
+mpremote connect auto repl
+```
+
+Prefer a GUI? [Thonny](https://thonny.org/) works well: set the interpreter to
+*MicroPython (Raspberry Pi Pico)* and it handles the board filesystem for you.
+
+### What it checks
+
+Six stages, each reporting PASS / FAIL / SKIP with a summary at the end:
+
+| Stage | Proves |
+|---|---|
+| `identity` | firmware, chip ID, clock, heap, filesystem |
+| `led` | GPIO path via the CYW43 — visible blink |
+| `temp` | ADC works (internal sensor, uncalibrated, ±a few °C) |
+| `wifi_scan` | radio powers up and hears networks |
+| `wifi_join` | association + DHCP lease |
+| `net_io` | DNS + TCP + HTTP, end to end |
+
+The last three need `secrets.py`; without it they report SKIP and the rest
+still runs, so the script is useful before you've picked a network.
+
+## Layout
+
+```
+micropython/
+  smoke_test.py         staged board bring-up check
+  secrets.example.py    WiFi credentials template -> copy to secrets.py
+```
