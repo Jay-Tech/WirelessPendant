@@ -42,6 +42,7 @@ T_JOG = "jog"
 T_JOG_CANCEL = "jog_cancel"
 T_BUTTON = "btn"
 T_ZERO = "zero"
+T_MODE = "mode"
 T_PING = "ping"
 
 # Sender -> pendant
@@ -81,6 +82,18 @@ def zero(axis):
     delayed by a reconnect cannot zero an axis the operator has since moved off.
     """
     return {"t": T_ZERO, "axis": axis}
+
+
+def mode(axis, step):
+    """Announce the pendant's selected axis and step size.
+
+    Axis and step never leave the pendant otherwise - they only change what
+    future jog messages say - which leaves the sender unable to show the
+    operator what the wheel is about to do. Publishing them costs one small
+    message per change and makes the pendant's state visible where the
+    operator is looking.
+    """
+    return {"t": T_MODE, "axis": axis, "step": step}
 
 
 def ping(seq):

@@ -129,6 +129,25 @@ async def poll_buttons():
         await asyncio.sleep_ms(BUTTON_POLL_MS)
 
 
+async def publish_mode():
+    """Tell the sender the selected axis and step whenever either changes.
+
+    Also re-publishes on a new session, since a reconnected sender has no
+    memory of what the pendant was set to - tracking the session count covers
+    both cases with one comparison.
+    """
+    last = None
+    while True:
+        if pendant_link is not None and pendant_link.connected:
+            current = (scheduler.axis, scheduler.step,
+                       pendant_link.stats["sessions"])
+            if current != last:
+                last = current
+                pendant_link.send(
+                    protocol.mode(scheduler.axis, scheduler.step))
+        await asyncio.sleep_ms(100)
+
+
 async def status_led():
     """no wifi = fast blink, idle = heartbeat, connected = solid.
 
@@ -203,6 +222,7 @@ async def main():
         pendant_link.run(),
         scheduler.run(pendant_link),
         poll_buttons(),
+        publish_mode(),
         status_led(),
         report(),
     )

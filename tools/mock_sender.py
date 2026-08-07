@@ -33,6 +33,8 @@ class MockSender:
         self.verbose = verbose
         self.position = {axis: 0.0 for axis in AXES}
         self.state = "Idle"
+        self.axis = "?"
+        self.step = 0.0
         self.feed_override = 100
         self.spindle_override = 100
         self.peer = None
@@ -73,6 +75,12 @@ class MockSender:
                 print("  jog cancel")
             return
 
+        if kind == "mode":
+            self.axis = message.get("axis", "?")
+            self.step = message.get("step", 0.0)
+            print("\n  mode: axis {} step {} mm".format(self.axis, self.step))
+            return
+
         if kind == "zero":
             axis = message.get("axis")
             if axis in self.position:
@@ -108,7 +116,8 @@ class MockSender:
 
     def dro_line(self):
         return "{:<5} ".format(self.state) + "  ".join(
-            "{} {:>9.3f}".format(axis, self.position[axis]) for axis in AXES)
+            "{} {:>9.3f}".format(axis, self.position[axis]) for axis in AXES
+        ) + "   [{} {}mm]".format(self.axis, self.step)
 
     def summary(self):
         elapsed = max(time.time() - self._started, 0.001)
