@@ -29,8 +29,15 @@ ADC_VREF = 3.3
 
 # The divider that is physically installed, so the tool can report the encoder
 # side of it rather than just its own input.
-R_TOP_K = 10.0
-R_BOTTOM_K = 20.0
+#
+# For an open-collector encoder the internal pull-up is already the top leg, so
+# the external circuit is a single resistor to ground and R_TOP_K is 0 - the
+# ADC then reads the encoder output directly and the ratio is 1.
+#
+#   characterising an unknown encoder:  10.0 / 20.0   (external divider)
+#   verifying the open-collector fix:    0.0 / 22.0   (single resistor)
+R_TOP_K = 0.0
+R_BOTTOM_K = 22.0
 
 CHANNELS = (("A", 26), ("B", 27))
 

@@ -308,34 +308,50 @@ Count the terminals:
 | **6** — A, B, 0V, Vcc, A-, B- | Differential **line driver**, push-pull, swings a full 0–5 V | Divider on A and B (below), or an RS-422 receiver |
 | 4 — A, B, 0V, Vcc | Single-ended; still need to know which kind | Open-collector: 4.7 kΩ pull-up to **3.3 V**. Push-pull: divider as below |
 
-The wheel in use here is the 6-terminal line-driver type. Wiring:
+**Six terminals does not automatically mean a line driver.** The wheel used
+here has A, B, 0V, Vcc, A-, B- and turned out to be **open-collector with an
+internal pull-up**, measured at ~13.3 kΩ. Characterise before wiring:
+
+```bash
+python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/probe_encoder.py
+```
+
+An open-collector output already has a pull-up forming the top leg of a
+divider, so adding an external series resistor only drops the level further.
+One resistor to ground is the whole circuit:
 
 ```
-  encoder A ──[10k]──┬──[20k]── GND        tap ──> GP2
-  encoder B ──[10k]──┬──[20k]── GND        tap ──> GP3
-  encoder 0V  ───────────────────────────────────> GND  (pin 38)
-  encoder Vcc ───────────────────────────────────> VBUS (pin 40, USB 5 V)
+  encoder A ──┬────────────────> GP2
+             [22k]
+              │
+             GND                 (same again for B -> GP3)
+
+  encoder 0V  ──────────────────> GND  (pin 38)
+  encoder Vcc ──────────────────> VBUS (pin 40, USB 5 V)
 ```
 
-5 V × 20/(10+20) = 3.33 V. Two 10 k in series substitutes for the 20 k leg. No
-pull-ups — a line driver drives both rails itself.
+4.909 V × 22/(13.3+22) = **3.06 V**. The level has to clear the RP2350's
+input-high threshold (~2.15 V) without passing its absolute maximum of
+**IOVDD + 0.3 V = 3.6 V**.
 
-Picking values: the junction has to clear the RP2350's input-high threshold
-(~2.15 V) without exceeding its absolute maximum of **IOVDD + 0.3 V = 3.6 V**.
-USB allows VBUS up to 5.25 V, so size against that end, not against 5.0 V.
+| To ground | Level | |
+|---|---|---|
+| 10k | 2.11 V | fails — below input-high |
+| 20k | 2.95 V | works |
+| **22k** | **3.06 V** | best centred, tolerant of pull-up variation |
 
-| Top → bottom | @ 5.0 V | @ 5.25 V | |
-|---|---|---|---|
-| 10k → 20k | 3.33 V | 3.50 V | recommended |
-| 10k → 22k | 3.44 V | 3.61 V | works, but over the limit on a hot rail |
-| 22k → 10k | 1.56 V | — | **fails** — never reaches input-high |
+Powering the encoder at 3V3 instead, to skip the resistor entirely, is not
+worth it: the part is specified at 5 V and an under-driven encoder that works
+intermittently is the worst outcome available.
 
-The resistors are not interchangeable: the **10 k is the one in series from the
-encoder**, the larger value goes to ground. Swapping them reads permanently
-low.
+A- and B- stay unused. They exist for noise immunity over a long cable; if
+`errors` climbs because the lead runs near a VFD or steppers, feed A/A- and
+B/B- into a 3.3 V RS-422 receiver and take single-ended out.
 
-Measure the junction before connecting to a GPIO. ≤3.5 V is good; ~5 V means
-the ground leg isn't reaching the rail; ~1.5 V means the pair is swapped.
+Erratum E9 is not a factor: the input is driven, not resting on a weak
+pull-down.
+
+Defaults are GP2 = A, GP3 = B.
 
 A- and B- go unused in this arrangement. They exist for noise immunity over a
 long cable; if `errors` starts climbing because the lead runs near a VFD or
