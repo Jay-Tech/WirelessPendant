@@ -26,10 +26,12 @@ from machine import Pin
 try:
     import link
     import protocol
+    from buttons import ButtonPanel, PRESS, RELEASE, LONG_PRESS
     from jog import JogScheduler, TICK_MS
     from quadrature import Quadrature
 except ImportError:
     from pendant import link, protocol
+    from pendant.buttons import ButtonPanel, PRESS, RELEASE, LONG_PRESS
     from pendant.jog import JogScheduler, TICK_MS
     from pendant.quadrature import Quadrature
 
@@ -40,6 +42,21 @@ ENCODER_PIN_B = 3
 
 START_AXIS = "X"
 START_STEP_INDEX = 2  # 0.1 mm per detent
+
+AXIS_ORDER = ("X", "Y", "Z")
+
+# Wire the buttons you have; the rest idle high through their pull-ups and stay
+# silent, so unpopulated entries cost nothing.
+BUTTON_MAP = (
+    (4, "axis_next"),
+    (5, "step_down"),
+    (6, "step_up"),
+    (7, "feed_hold"),
+    (8, "cycle_start"),
+    (9, "jog_cancel"),
+)
+
+BUTTON_POLL_MS = 20
 
 STATUS_REPORT_S = 15
 
@@ -56,6 +73,53 @@ def on_message(message):
     state["status_frames"] += 1
     state["dro"] = message.get("wpos")
     state["machine_state"] = message.get("state", "?")
+
+
+def handle_button(action, event):
+    """Map one button event onto pendant state or a message to the sender."""
+    # Axis and step live entirely on the pendant: they change what future jog
+    # messages say, and the sender has no opinion about them.
+    if event == PRESS and action == "axis_next":
+        index = AXIS_ORDER.index(scheduler.axis) if scheduler.axis in AXIS_ORDER else -1
+        cancel = scheduler.set_axis(AXIS_ORDER[(index + 1) % len(AXIS_ORDER)])
+        link.log("axis -> {}".format(scheduler.axis))
+        return cancel
+
+    if event == PRESS and action == "step_up":
+        link.log("step -> {} mm".format(scheduler.step_up()))
+        return None
+
+    if event == PRESS and action == "step_down":
+        link.log("step -> {} mm".format(scheduler.step_down()))
+        return None
+
+    if event == PRESS and action == "jog_cancel":
+        link.log("jog cancel")
+        return protocol.jog_cancel()
+
+    # Machine controls are forwarded with their up/down state rather than as
+    # one-shot events, so the sender can distinguish a held button from a tap.
+    if action in ("feed_hold", "cycle_start") and event in (PRESS, RELEASE):
+        down = event == PRESS
+        link.log("{} {}".format(action, "down" if down else "up"))
+        return protocol.button(action, down)
+
+    if event == LONG_PRESS:
+        link.log("long press on {} (no action bound)".format(action))
+
+    return None
+
+
+async def poll_buttons():
+    panel = ButtonPanel(BUTTON_MAP)
+    link.log("buttons on GP{}".format(
+        "/GP".join(str(pin) for pin, _ in BUTTON_MAP)))
+    while True:
+        for action, event in panel.poll(time.ticks_ms()):
+            message = handle_button(action, event)
+            if message is not None and pendant_link is not None:
+                pendant_link.send(message)
+        await asyncio.sleep_ms(BUTTON_POLL_MS)
 
 
 async def status_led():
@@ -131,6 +195,7 @@ async def main():
     await asyncio.gather(
         pendant_link.run(),
         scheduler.run(pendant_link),
+        poll_buttons(),
         status_led(),
         report(),
     )
