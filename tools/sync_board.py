@@ -24,7 +24,8 @@ PENDANT = ROOT / "micropython" / "pendant"
 
 # Modules the pendant imports at runtime. Self-tests and probes are not copied:
 # `mpremote run` streams them from here, so they are always current.
-MODULES = ["quadrature.py", "protocol.py", "link.py", "jog.py", "buttons.py"]
+MODULES = ["quadrature.py", "protocol.py", "link.py", "jog.py", "buttons.py",
+           "ili9341.py", "screen.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
 DEFAULT_DEVICE = "id:7BE7DD09548134C0"

@@ -61,11 +61,22 @@ BUTTON_MAP = (
 
 BUTTON_POLL_MS = 20
 
+# Display. Optional throughout: if the panel is absent or miswired the pendant
+# still jogs, which matters because the display is a convenience and the
+# handwheel is the function.
+DISPLAY_ENABLED = True
+SPI_ID = 0
+PIN_SCK, PIN_MOSI = 18, 19
+PIN_CS, PIN_DC, PIN_RST, PIN_BL = 17, 20, 21, 22
+SPI_BAUD = 20_000_000
+DISPLAY_REFRESH_MS = 100
+
 STATUS_REPORT_S = 15
 
 encoder = None
 scheduler = None
 pendant_link = None
+screen = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0}
 
@@ -129,6 +140,57 @@ async def poll_buttons():
         await asyncio.sleep_ms(BUTTON_POLL_MS)
 
 
+def start_display():
+    """Bring up the panel, or return None and carry on without it."""
+    if not DISPLAY_ENABLED:
+        return None
+    try:
+        from machine import SPI
+        try:
+            from screen import DroScreen
+        except ImportError:
+            from pendant.screen import DroScreen
+
+        spi = SPI(SPI_ID, baudrate=SPI_BAUD, polarity=0, phase=0,
+                  sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI))
+        panel = DroScreen(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL)
+        panel.splash("connecting...")
+        link.log("display on SPI{} at {} MHz".format(
+            SPI_ID, SPI_BAUD // 1000000))
+        return panel
+    except Exception as exc:
+        # A missing or miswired panel must not stop the pendant jogging.
+        link.log("display unavailable ({}: {}) - running headless".format(
+            type(exc).__name__, exc))
+        return None
+
+
+async def refresh_display():
+    """Push current state to the panel.
+
+    Polls rather than being driven by events because the screen redraws only
+    changed characters anyway - a poll that finds nothing different costs a few
+    string comparisons, and this keeps display work off the message handler.
+    """
+    if screen is None:
+        return
+
+    # Replace the splash with the live layout now the panel is known good.
+    screen.__init__(screen.display._spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL)
+
+    while True:
+        try:
+            screen.set_link(pendant_link.connected if pendant_link else False)
+            screen.set_state(state["machine_state"])
+            screen.set_mode(scheduler.axis, scheduler.step)
+            if state["dro"]:
+                screen.set_position(state["dro"])
+        except Exception as exc:
+            link.log("display error: {}: {}".format(type(exc).__name__, exc))
+            return
+        await asyncio.sleep_ms(DISPLAY_REFRESH_MS)
+
+
 async def publish_mode():
     """Tell the sender the selected axis and step whenever either changes.
 
@@ -189,11 +251,12 @@ async def report():
 
 
 async def main():
-    global encoder, scheduler, pendant_link
+    global encoder, scheduler, pendant_link, screen
 
     print("\ngrblHAL wireless pendant")
     print("=" * 46)
 
+    screen = start_display()
     encoder = Quadrature(ENCODER_PIN_A, ENCODER_PIN_B)
     link.log("handwheel on GP{}/GP{}".format(ENCODER_PIN_A, ENCODER_PIN_B))
 
@@ -223,6 +286,7 @@ async def main():
         scheduler.run(pendant_link),
         poll_buttons(),
         publish_mode(),
+        refresh_display(),
         status_led(),
         report(),
     )
