@@ -104,6 +104,7 @@ class PendantLink:
         self._limit = queue_limit
         self._decoder = protocol.LineDecoder()
         self._alive = False
+        self._productive = False
         self._last_rx = 0
         self._ping_seq = 0
 
@@ -191,6 +192,14 @@ class PendantLink:
                     log("sender closed the connection")
                     break
                 self._last_rx = time.ticks_ms()
+                if not self.connected:
+                    # Only now is the link proven in both directions. A TCP
+                    # connect can return before the handshake completes, so
+                    # treating open_connection as "connected" reports a link
+                    # that is about to be reset as working.
+                    self.connected = True
+                    self._productive = True
+                    log("connected")
                 for message in self._decoder.feed(chunk):
                     self.stats["received"] += 1
                     if message.get("t") == protocol.T_PING:
@@ -225,12 +234,19 @@ class PendantLink:
         self._decoder.reset()
         self._alive = True
         self._last_rx = time.ticks_ms()
-        self.connected = True
+        self._productive = False
         self.stats["sessions"] += 1
-        log("connected")
 
-        # Announce ourselves ahead of anything already queued.
-        self._queue.insert(0, protocol.hello())
+        # Anything queued while the link was down is stale operator input: jog
+        # detents from a wheel that has since stopped, buttons pressed a minute
+        # ago. Replaying it on reconnect makes the machine act on intent the
+        # operator has long moved past, so the queue starts empty.
+        dropped = len(self._queue)
+        if dropped:
+            self.stats["dropped"] += dropped
+            log("discarded {} message(s) queued while disconnected".format(
+                dropped))
+        self._queue = [protocol.hello()]
 
         tx = asyncio.create_task(self._tx(writer))
         deadline = asyncio.create_task(self._deadline())
@@ -257,7 +273,13 @@ class PendantLink:
         while True:
             try:
                 await self._session()
-                delay = RECONNECT_DELAY_S  # a real session resets the backoff
+                # Only a session that actually carried traffic resets the
+                # backoff. A connect that returns and is immediately reset
+                # still completes _session normally, so resetting on that
+                # alone would retry once a second forever against a host that
+                # is up but has nothing listening.
+                if self._productive:
+                    delay = RECONNECT_DELAY_S
             except OSError as exc:
                 log("connect failed: {}".format(exc))
             except Exception as exc:
