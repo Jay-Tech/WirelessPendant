@@ -32,9 +32,16 @@ TICK_MS = 20
 STEP_SIZES = (0.001, 0.01, 0.1, 1.0)
 DEFAULT_STEP_INDEX = 2
 
-# Ticks of no movement before a jog cancel is emitted. One tick is too eager -
-# a hand pausing mid-turn between detents would cancel and restart constantly.
-IDLE_TICKS_BEFORE_CANCEL = 3
+# Silence that counts as "the operator stopped" rather than "turning slowly".
+#
+# Cancel flushes queued motion, which is the point - stopping the wheel should
+# halt the machine rather than let it run on through a backlog. The risk is
+# firing during a slow turn and truncating a jog mid-move. Someone winding
+# continuously produces a detent at least every ~300 ms even when crawling, so
+# anything quieter than that is a genuine stop. Shorter thresholds cancel
+# between individual detents during normal slow jogging.
+IDLE_MS_BEFORE_CANCEL = 300
+IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 
 
 class JogScheduler:

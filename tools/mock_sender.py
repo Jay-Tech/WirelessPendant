@@ -36,7 +36,7 @@ class MockSender:
         self.feed_override = 100
         self.spindle_override = 100
         self.peer = None
-        self.counts = {"jog": 0, "btn": 0, "ping": 0, "other": 0}
+        self.counts = {"jog": 0, "btn": 0, "zero": 0, "ping": 0, "other": 0}
         self.jogged = 0.0
         self._started = time.time()
 
@@ -73,6 +73,16 @@ class MockSender:
                 print("  jog cancel")
             return
 
+        if kind == "zero":
+            axis = message.get("axis")
+            if axis in self.position:
+                self.position[axis] = 0.0
+                self.counts["zero"] += 1
+                print("\n  ZERO {}".format(axis))
+            else:
+                print("\n  ! zero for unknown axis {!r}".format(axis))
+            return
+
         if kind == "btn":
             self.counts["btn"] += 1
             print("  button {} {}".format(
@@ -102,7 +112,7 @@ class MockSender:
 
     def summary(self):
         elapsed = max(time.time() - self._started, 0.001)
-        return ("jog={jog} btn={btn} ping={ping} other={other}"
+        return ("jog={jog} btn={btn} zero={zero} ping={ping} other={other}"
                 "  moved={moved:.3f}mm  {rate:.1f} msg/s").format(
             moved=self.jogged,
             rate=sum(self.counts.values()) / elapsed,

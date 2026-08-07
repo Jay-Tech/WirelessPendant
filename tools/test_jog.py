@@ -108,6 +108,20 @@ for i in range(20):
     messages.append(sched.tick())
 check("+/-1 dither at rest emits nothing", messages, [None] * 20)
 
+# The cancel threshold has to clear a slow turn. Someone winding continuously
+# still produces a detent every few hundred ms; if the threshold fired inside
+# that gap it would flush motion mid-jog during ordinary slow jogging.
+enc, sched = new_scheduler()
+ticks_between_detents = 250 // 20  # a slow but continuous 4 detents/second
+slow_turn = []
+for _ in range(6):
+    enc.move(4)
+    slow_turn.append(sched.tick())
+    for _ in range(ticks_between_detents - 1):
+        slow_turn.append(sched.tick())
+check("slow continuous turn is never mistaken for a stop",
+      [m for m in slow_turn if m and m["t"] == "jog_cancel"], [])
+
 # Dither that never accumulates must also never look like motion, so it must
 # not arm the idle timer and produce a stray cancel either.
 check("  and never triggers a cancel", sched.stats["cancels"], 0)

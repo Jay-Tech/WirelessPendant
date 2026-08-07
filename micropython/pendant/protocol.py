@@ -41,6 +41,7 @@ T_HELLO = "hello"
 T_JOG = "jog"
 T_JOG_CANCEL = "jog_cancel"
 T_BUTTON = "btn"
+T_ZERO = "zero"
 T_PING = "ping"
 
 # Sender -> pendant
@@ -70,6 +71,16 @@ def jog_cancel():
 
 def button(button_id, down):
     return {"t": T_BUTTON, "id": button_id, "down": bool(down)}
+
+
+def zero(axis):
+    """Set the work offset so the named axis reads zero here.
+
+    Carries the axis explicitly rather than meaning "whatever is selected", so
+    the sender never has to track pendant state to interpret it - and a message
+    delayed by a reconnect cannot zero an axis the operator has since moved off.
+    """
+    return {"t": T_ZERO, "axis": axis}
 
 
 def ping(seq):

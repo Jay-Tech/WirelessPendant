@@ -53,7 +53,10 @@ BUTTON_MAP = (
     (6, "step_up"),
     (7, "feed_hold"),
     (8, "cycle_start"),
-    (9, "jog_cancel"),
+    # Zeroing fires on a long hold, never a tap. It rewrites the work offset,
+    # and doing that by accident mid-job loses your datum. There is no manual
+    # jog cancel button: the scheduler already cancels when the wheel stops.
+    (9, "zero_axis"),
 )
 
 BUTTON_POLL_MS = 20
@@ -93,9 +96,13 @@ def handle_button(action, event):
         link.log("step -> {} mm".format(scheduler.step_down()))
         return None
 
-    if event == PRESS and action == "jog_cancel":
-        link.log("jog cancel")
-        return protocol.jog_cancel()
+    if action == "zero_axis":
+        if event == PRESS:
+            link.log("hold to zero {}".format(scheduler.axis))
+        elif event == LONG_PRESS:
+            link.log("zeroing {}".format(scheduler.axis))
+            return protocol.zero(scheduler.axis)
+        return None
 
     # Machine controls are forwarded with their up/down state rather than as
     # one-shot events, so the sender can distinguish a held button from a tap.
