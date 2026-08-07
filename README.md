@@ -317,9 +317,25 @@ The wheel in use here is the 6-terminal line-driver type. Wiring:
   encoder Vcc ───────────────────────────────────> VBUS (pin 40, USB 5 V)
 ```
 
-5 V × 20/(10+20) = 3.33 V. Two 10 k in series substitutes for the 20 k leg.
-RP2350's input-high threshold is around 2.15 V, so a 3.0 V divider result is
-also fine. No pull-ups — a line driver drives both rails itself.
+5 V × 20/(10+20) = 3.33 V. Two 10 k in series substitutes for the 20 k leg. No
+pull-ups — a line driver drives both rails itself.
+
+Picking values: the junction has to clear the RP2350's input-high threshold
+(~2.15 V) without exceeding its absolute maximum of **IOVDD + 0.3 V = 3.6 V**.
+USB allows VBUS up to 5.25 V, so size against that end, not against 5.0 V.
+
+| Top → bottom | @ 5.0 V | @ 5.25 V | |
+|---|---|---|---|
+| 10k → 20k | 3.33 V | 3.50 V | recommended |
+| 10k → 22k | 3.44 V | 3.61 V | works, but over the limit on a hot rail |
+| 22k → 10k | 1.56 V | — | **fails** — never reaches input-high |
+
+The resistors are not interchangeable: the **10 k is the one in series from the
+encoder**, the larger value goes to ground. Swapping them reads permanently
+low.
+
+Measure the junction before connecting to a GPIO. ≤3.5 V is good; ~5 V means
+the ground leg isn't reaching the rail; ~1.5 V means the pair is swapped.
 
 A- and B- go unused in this arrangement. They exist for noise immunity over a
 long cable; if `errors` starts climbing because the lead runs near a VFD or
