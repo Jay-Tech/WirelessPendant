@@ -19,6 +19,12 @@ import sys
 import time
 
 STATUS_HZ = 10
+
+# Redraw rate for the on-screen DRO. Deliberately slower than the status rate:
+# this is for a human to read, and digits changing 10 times a second are just a
+# blur.
+DRO_HZ = 5
+
 AXES = ("X", "Y", "Z")
 
 
@@ -90,6 +96,10 @@ class MockSender:
             "sro": self.spindle_override,
         }
 
+    def dro_line(self):
+        return "{:<5} ".format(self.state) + "  ".join(
+            "{} {:>9.3f}".format(axis, self.position[axis]) for axis in AXES)
+
     def summary(self):
         elapsed = max(time.time() - self._started, 0.001)
         return ("jog={jog} btn={btn} ping={ping} other={other}"
@@ -107,6 +117,8 @@ async def handle_pendant(reader, writer, sender):
 
     buffer = b""
     last_status = 0.0
+    last_dro = 0.0
+    last_dro_text = ""
 
     try:
         while True:
@@ -133,6 +145,16 @@ async def handle_pendant(reader, writer, sender):
             if now - last_status >= 1.0 / STATUS_HZ:
                 last_status = now
                 outbound.append(sender.status())
+
+            # Live one-line DRO, rewritten in place. Without this the only way
+            # to watch the pendant work is --verbose, which scrolls a line per
+            # jog and is unreadable while the wheel is actually turning.
+            if now - last_dro >= 1.0 / DRO_HZ:
+                last_dro = now
+                snapshot = sender.dro_line()
+                if snapshot != last_dro_text:
+                    last_dro_text = snapshot
+                    print("\r" + snapshot + "   ", end="", flush=True)
 
             for message in outbound:
                 writer.write((json.dumps(message) + "\n").encode())
