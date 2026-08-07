@@ -61,9 +61,18 @@ def hello():
     return {"t": T_HELLO, "dev": DEVICE, "ver": VERSION}
 
 
-def jog(axis, detents, step):
-    """A handwheel movement. `detents` is signed; `step` is mm per detent."""
-    return {"t": T_JOG, "axis": axis, "det": detents, "step": step}
+def jog(axis, detents, step, feed=None):
+    """A handwheel movement.
+
+    `detents` is signed, `step` is mm per detent, and `feed` is mm/min matching
+    the speed the wheel is being turned. Distance stays exactly detents x step;
+    only the feed varies, so a dropped message costs a little motion rather than
+    leaving the two ends disagreeing about position.
+    """
+    message = {"t": T_JOG, "axis": axis, "det": detents, "step": step}
+    if feed is not None:
+        message["feed"] = round(feed, 1)
+    return message
 
 
 def jog_cancel():

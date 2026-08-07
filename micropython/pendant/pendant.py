@@ -196,7 +196,7 @@ async def refresh_display():
             screen.set_link(pendant_link.connected if pendant_link else False)
             screen.set_state(state["machine_state"])
             screen.set_mode(scheduler.axis, scheduler.step,
-                            scheduler.cancel_on_stop)
+                            scheduler.cancel_on_stop, scheduler.feed)
             if state["dro"]:
                 screen.set_position(state["dro"])
         except Exception as exc:

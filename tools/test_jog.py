@@ -11,17 +11,26 @@ sys.modules.setdefault("machine", types.ModuleType("machine"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
 from pendant import protocol  # noqa: E402
-from pendant.jog import JogScheduler, STEP_SIZES, IDLE_TICKS_BEFORE_CANCEL  # noqa: E402
+from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
+                         IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
+                         FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS)
 
 failures = []
 
 
 def check(label, got, want):
     ok = got == want
-    print("  {:<50} {}".format(label, "PASS" if ok else "FAIL"))
+    print("  {:<52} {}".format(label, "PASS" if ok else "FAIL"))
     if not ok:
         print("      got  {!r}\n      want {!r}".format(got, want))
         failures.append(label)
+
+
+def motion(message):
+    """The distance-carrying fields of a jog message, ignoring feed."""
+    if message is None or message.get("t") != "jog":
+        return message
+    return {k: message[k] for k in ("t", "axis", "det", "step")}
 
 
 class FakeEncoder:
@@ -47,14 +56,14 @@ def new_scheduler(axis="X"):
 print("coalescing")
 
 enc, sched = new_scheduler()
-enc.move(4)  # exactly one detent
-check("one detent produces one jog message", sched.tick(),
+enc.move(4)
+check("one detent produces one jog message", motion(sched.tick()),
       {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
 
 enc, sched = new_scheduler()
 enc.move(4 * 7)
 check("seven detents in one tick coalesce into one message",
-      sched.tick(), {"t": "jog", "axis": "X", "det": 7, "step": 0.1})
+      motion(sched.tick()), {"t": "jog", "axis": "X", "det": 7, "step": 0.1})
 
 enc, sched = new_scheduler()
 check("no movement produces no message", sched.tick(), None)
@@ -62,7 +71,7 @@ check("no movement produces no message", sched.tick(), None)
 enc, sched = new_scheduler()
 enc.move(-4 * 3)
 check("reverse rotation gives negative detents",
-      sched.tick(), {"t": "jog", "axis": "X", "det": -3, "step": 0.1})
+      motion(sched.tick()), {"t": "jog", "axis": "X", "det": -3, "step": 0.1})
 
 print("\npartial detents")
 
@@ -72,7 +81,7 @@ enc, sched = new_scheduler()
 results = []
 for _ in range(4):
     enc.move(1)
-    results.append(sched.tick())
+    results.append(motion(sched.tick()))
 check("single counts accumulate rather than rounding away",
       results, [None, None, None,
                 {"t": "jog", "axis": "X", "det": 1, "step": 0.1}])
@@ -85,7 +94,6 @@ second = sched.tick()
 check("remainder carries into the following tick",
       (first["det"], second["det"]), (1, 1))
 
-# Twenty ticks of a slow, steady turn must deliver every detent, no drift.
 enc, sched = new_scheduler()
 total = 0
 for _ in range(20):
@@ -94,6 +102,68 @@ for _ in range(20):
     if message and message["t"] == "jog":
         total += message["det"]
 check("slow steady turn loses no motion over 20 ticks", total, 10)
+
+print("\nfeed tracking")
+
+# The property the whole design rests on: distance is exactly one step per
+# detent no matter how fast the wheel turns, and only the feed varies. Scaling
+# distance instead makes how far the axis moved depend on how deep the queue
+# was when you stopped, which is the run-off this exists to avoid.
+per_detent = []
+for rate in (1, 3, 6, 12):
+    enc, sched = new_scheduler()
+    for _ in range(RATE_WINDOW_TICKS * 2):
+        enc.move(4 * rate)
+        message = sched.tick()
+    per_detent.append(abs(message["det"] * message["step"]) / rate)
+check("distance per detent is identical at every turn speed",
+      all(abs(d - 0.1) < 1e-9 for d in per_detent), True)
+
+# A slow turn sits on the floor rather than crawling.
+enc, sched = new_scheduler()
+for _ in range(20):
+    enc.move(4)
+    slow = sched.tick()
+    for _ in range(9):
+        sched.tick()
+check("slow turning feeds at the floor", slow["feed"], FEED_MIN_MM_MIN)
+
+# Feed should equal the rate actually being commanded: detents/s x mm x 60.
+enc, sched = new_scheduler()
+sched.set_step_index(3)                  # 1.0 mm per detent
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4)                          # 1 detent per 20 ms = 50 detents/s
+    tracked = sched.tick()
+check("feed matches the commanded rate", tracked["feed"], 50 * 1.0 * 60)
+
+# Capped, because asking for more than the machine can deliver only rebuilds
+# the queue this design exists to keep shallow.
+enc, sched = new_scheduler()
+sched.set_step_index(3)
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 6)                      # 300 detents/s at 1 mm
+    capped = sched.tick()
+check("feed is capped at the ceiling", capped["feed"], FEED_MAX_MM_MIN)
+check("  while distance stays exact", capped["det"] * capped["step"], 6.0)
+
+enc, sched = new_scheduler()
+sched.feed_tracking = False
+enc.move(4)
+check("feed tracking can be disabled", sched.tick()["feed"], FEED_MAX_MM_MIN)
+
+# A pause must not leave a high feed armed for the next careful detent - that
+# would make the first move after a pause far faster than intended.
+enc, sched = new_scheduler()
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
+    spinning = sched.tick()
+check("fast turning raises the feed", spinning["feed"], 300 * 0.1 * 60)
+
+for _ in range(RATE_WINDOW_TICKS):
+    sched.tick()                         # idle; the window fills with zeros
+enc.move(4)
+check("  and it decays back to the floor while idle",
+      sched.tick()["feed"], FEED_MIN_MM_MIN)
 
 print("\nrest dither")
 
@@ -112,7 +182,7 @@ check("+/-1 dither at rest emits nothing", messages, [None] * 20)
 # still produces a detent every few hundred ms; if the threshold fired inside
 # that gap it would flush motion mid-jog during ordinary slow jogging.
 enc, sched = new_scheduler()
-ticks_between_detents = 250 // 20  # a slow but continuous 4 detents/second
+ticks_between_detents = 250 // TICK_MS      # a slow but continuous 4 detents/s
 slow_turn = []
 for _ in range(6):
     enc.move(4)
@@ -121,15 +191,11 @@ for _ in range(6):
         slow_turn.append(sched.tick())
 check("slow continuous turn is never mistaken for a stop",
       [m for m in slow_turn if m and m["t"] == "jog_cancel"], [])
-
-# Dither that never accumulates must also never look like motion, so it must
-# not arm the idle timer and produce a stray cancel either.
 check("  and never triggers a cancel", sched.stats["cancels"], 0)
 
-# Real motion still gets through immediately afterwards.
 enc.move(4)
 check("  and real motion still registers after dithering",
-      sched.tick(), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
+      motion(sched.tick()), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
 
 print("\njog cancel")
 
@@ -137,8 +203,7 @@ enc, sched = new_scheduler()
 enc.move(4)
 sched.tick()
 cancels = [sched.tick() for _ in range(IDLE_TICKS_BEFORE_CANCEL)]
-check("cancel emitted once motion stops",
-      cancels[-1], {"t": "jog_cancel"})
+check("cancel emitted once motion stops", cancels[-1], {"t": "jog_cancel"})
 check("  and not before the idle threshold",
       cancels[:-1], [None] * (IDLE_TICKS_BEFORE_CANCEL - 1))
 
@@ -150,7 +215,6 @@ for _ in range(IDLE_TICKS_BEFORE_CANCEL):
 check("cancel is not repeated while idle",
       [sched.tick() for _ in range(5)], [None] * 5)
 
-# A hand pausing between detents must not trigger a cancel/restart cycle.
 enc, sched = new_scheduler()
 enc.move(4)
 sched.tick()
@@ -171,14 +235,11 @@ check("detents still delivered with cancel disabled", first["det"], 5)
 check("  and stopping emits no cancel", [m for m in idle if m], [])
 check("  so nothing flushes the queued motion", sched.stats["cancels"], 0)
 
-# Flipping back mid-session must resume cancelling, since the point of the
-# flag is comparing the two on one machine without restarting.
 sched.cancel_on_stop = True
 enc.move(4)
 sched.tick()
 resumed = [sched.tick() for _ in range(IDLE_TICKS_BEFORE_CANCEL)]
-check("re-enabling restores cancel on stop",
-      resumed[-1], {"t": "jog_cancel"})
+check("re-enabling restores cancel on stop", resumed[-1], {"t": "jog_cancel"})
 
 print("\naxis and step")
 
@@ -199,7 +260,7 @@ sched.tick()
 sched.set_axis("Z")
 enc.move(4)
 check("  and motion during the switch is discarded",
-      sched.tick(), {"t": "jog", "axis": "Z", "det": 1, "step": 0.1})
+      motion(sched.tick()), {"t": "jog", "axis": "Z", "det": 1, "step": 0.1})
 
 enc, sched = new_scheduler()
 sched.step_up()
@@ -223,7 +284,7 @@ check("disabled scheduler emits nothing", sched.tick(), None)
 sched.enabled = True
 enc.move(4)
 check("  and motion while disabled is discarded, not replayed",
-      sched.tick(), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
+      motion(sched.tick()), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
 
 print()
 if failures:

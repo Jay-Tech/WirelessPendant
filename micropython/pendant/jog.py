@@ -27,9 +27,10 @@ except ImportError:
 # interval, so this scheduler is not the bottleneck.
 TICK_MS = 20
 
-# Millimetres per detent. A 100 detent wheel makes one revolution equal 10 mm
-# at the default, which is a comfortable feel for positioning.
-STEP_SIZES = (0.001, 0.01, 0.1, 1.0)
+# Millimetres per detent. The coarse end matters on a large machine: at 1 mm a
+# 1257 mm (49.5") axis is 12.6 revolutions end to end, while 5 mm makes it 2.5.
+# The fine end is what the wheel is actually for.
+STEP_SIZES = (0.001, 0.01, 0.1, 1.0, 5.0)
 DEFAULT_STEP_INDEX = 2
 
 # Silence that counts as "the operator stopped" rather than "turning slowly".
@@ -42,6 +43,38 @@ DEFAULT_STEP_INDEX = 2
 # between individual detents during normal slow jogging.
 IDLE_MS_BEFORE_CANCEL = 300
 IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
+
+# --- turn rate drives feed, not distance ----------------------------------
+#
+# Spinning faster raises the feed rate. It does not multiply the distance.
+#
+# Scaling distance is the obvious approach and it is wrong. Commanding several
+# times more travel than the machine can execute while the wheel is turning
+# builds a queue, and then how far the axis actually moved depends on how deep
+# that queue was when you stopped - it either runs on, or a cancel discards an
+# unpredictable part of it. Either way the wheel stops meaning anything
+# specific.
+#
+# Holding distance at exactly one step per detent and raising the feed instead
+# keeps the queue shallow: each small move completes quickly, so stopping the
+# wheel stops the machine almost immediately. That is what a hardwired pendant
+# feels like.
+#
+# The natural target for the feed is the rate the operator is already
+# commanding. Winding 50 detents/s at 1 mm per detent asks for 50 mm/s, so
+# feeding at exactly that makes the machine track the hand.
+FEED_TRACKING_ENABLED = True
+
+# Floor, so a slow careful turn still moves at a usable rate rather than
+# crawling, and ceiling, which should sit at or below the machine's own maximum
+# jog rate - asking for more than it can deliver just rebuilds the queue this
+# is meant to avoid.
+FEED_MIN_MM_MIN = 100.0
+FEED_MAX_MM_MIN = 4000.0
+
+# Rate is measured over a window rather than per tick: at 20 ms a tick sees one
+# or two detents even during a fast spin, far too coarse to estimate speed from.
+RATE_WINDOW_TICKS = 10
 
 
 class JogScheduler:
@@ -67,9 +100,13 @@ class JogScheduler:
         # on a real machine from the REPL, without a reflash between runs.
         self.cancel_on_stop = True
 
+        self.feed_tracking = FEED_TRACKING_ENABLED
+
         self._residual = 0
         self._idle_ticks = 0
         self._moving = False
+        self._recent = []          # detents per tick, most recent last
+        self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self.stats = {"messages": 0, "detents": 0, "cancels": 0}
 
     # --- configuration ----------------------------------------------------
@@ -109,6 +146,37 @@ class JogScheduler:
 
     # --- per tick ---------------------------------------------------------
 
+    def turn_rate(self):
+        """Detents per second, averaged over the full window.
+
+        Divided by the whole window rather than by however many samples exist
+        yet, so a burst at the very start of a turn averages in instead of
+        reading as a sustained sprint.
+        """
+        total = 0
+        for value in self._recent:
+            total += abs(value)
+        seconds = RATE_WINDOW_TICKS * TICK_MS / 1000.0
+        return total / seconds
+
+    def feed_rate(self):
+        """Feed in mm/min that matches the current winding speed.
+
+        detents/s x mm/detent x 60 is exactly the rate the operator is asking
+        for, so the machine tracks the hand rather than lagging behind it or
+        racing ahead. Clamped at both ends: a floor so a careful turn is not
+        glacial, and a ceiling because commanding more than the machine can
+        deliver only rebuilds the queue.
+        """
+        if not self.feed_tracking:
+            return FEED_MAX_MM_MIN
+        commanded = self.turn_rate() * self.step * 60.0
+        if commanded < FEED_MIN_MM_MIN:
+            return FEED_MIN_MM_MIN
+        if commanded > FEED_MAX_MM_MIN:
+            return FEED_MAX_MM_MIN
+        return commanded
+
     def tick(self):
         """Advance one interval. Returns a message to send, or None."""
         counts = self.encoder.take()
@@ -126,12 +194,23 @@ class JogScheduler:
         detents = int(self._residual / 4)
         self._residual -= detents * 4
 
+        # Rate history advances every tick, including empty ones - otherwise a
+        # pause would keep the previous speed alive and the next slow detent
+        # would arrive multiplied.
+        self._recent.append(detents)
+        if len(self._recent) > RATE_WINDOW_TICKS:
+            self._recent.pop(0)
+
         if detents:
             self._idle_ticks = 0
             self._moving = True
+
+            # Distance stays exactly one step per detent. Only the feed moves.
+            self.feed = self.feed_rate()
+
             self.stats["messages"] += 1
             self.stats["detents"] += abs(detents)
-            return protocol.jog(self.axis, detents, self.step)
+            return protocol.jog(self.axis, detents, self.step, self.feed)
 
         if self._moving:
             if not self.cancel_on_stop:
