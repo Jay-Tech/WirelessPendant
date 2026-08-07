@@ -79,21 +79,27 @@ class DroScreen:
         self.display.fill(BLACK)
 
         big = Glyphs(scale=4)      # 32 px - the position readout
-        small = Glyphs(scale=2)    # 16 px - labels and status
+        medium = Glyphs(scale=3)   # 24 px - axis labels
+        small = Glyphs(scale=2)    # 16 px - status lines
         self._big = big
         self._small = small
 
-        # Layout for 320x240 landscape. Three position rows down the left,
-        # status stacked on the right.
+        # Layout for 320x240 landscape. Three position rows, status beneath.
+        #
+        # The width is tight and drives the sizes: nine digit cells at 32 px is
+        # 288 of the 320 available, and nine is what "-1234.567" needs. Starting
+        # the digits at x=30 leaves 26 px for the label, which fits a 24 px
+        # glyph - so the label reads at three quarters of the digit height
+        # rather than half, which matters because the highlighted axis is what
+        # you glance at to know what the wheel will move.
         self._labels = {}
         self._positions = {}
         for row, axis in enumerate(AXES):
             y = 20 + row * 46
-            label = Field(self.display, small, 8, y + 8, 1, color=GREY)
+            label = Field(self.display, medium, 4, y + 4, 1, color=GREY)
             label.set(axis)
             self._labels[axis] = label
-            # 9 cells fits "-9999.999" without ever reflowing the layout.
-            self._positions[axis] = Field(self.display, big, 32, y, 9)
+            self._positions[axis] = Field(self.display, big, 30, y, 9)
 
         self._state = Field(self.display, small, 8, 170, 10, color=GREEN)
         self._mode = Field(self.display, small, 8, 194, 14, color=WHITE)
