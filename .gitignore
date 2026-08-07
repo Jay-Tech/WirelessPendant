@@ -47,6 +47,12 @@ boot_out.txt
 .idea/
 *.code-workspace
 
+# Visual Studio local state. Keeps file locks on its index, which breaks
+# `git add` outright rather than just adding noise.
+.vs/
+*.suo
+*.user
+
 # --- OS junk ---
 Thumbs.db
 ehthumbs.db

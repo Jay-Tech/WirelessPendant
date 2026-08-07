@@ -55,6 +55,26 @@ holding `mpremote.exe` is not on `PATH`, so the bare command fails with
 The `-m` form sidesteps that and works on every platform. See
 [PATH fix](#windows-store-python-path) if you want the short command back.
 
+> ### ⚠️ Do not use `connect auto` on a machine with a CNC controller attached
+>
+> `auto` connects to the first USB serial device it finds. If a grblHAL
+> controller is plugged in, that can be the controller rather than the Pico —
+> and mpremote will then send raw-REPL control bytes (`Ctrl-A`/`Ctrl-C`) to
+> your machine controller trying to get a Python prompt. It happened here: the
+> STM32 board on `0483:5740` got grabbed instead of the Pico and reset.
+>
+> Target the board explicitly by its unique ID instead. This board is
+> `id:7BE7DD09548134C0`, which is what every command below uses, and it stays
+> correct across COM port renumbering:
+>
+> ```bash
+> python -m mpremote devs
+> ```
+>
+> Pico boards report a `2e8a:` vendor ID (`0005` = MicroPython running,
+> `000f` = RP2350 BOOTSEL). An STM32 grblHAL board reports `0483:5740`. Use
+> the serial number in the second column as `id:<serial>`.
+
 Set up credentials (this file is gitignored — it never reaches a commit):
 
 ```bash
@@ -66,11 +86,11 @@ makes `wifi_join` fail with `no such network in range`. Then copy it to the
 board and run the test:
 
 ```bash
-python -m mpremote connect auto fs cp micropython/secrets.py :secrets.py
+python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/secrets.py :secrets.py
 ```
 
 ```bash
-python -m mpremote connect auto run micropython/smoke_test.py
+python -m mpremote connect id:7BE7DD09548134C0 run micropython/smoke_test.py
 ```
 
 `run` streams the script from your PC rather than installing it, but imports
@@ -78,7 +98,7 @@ still resolve on the board — which is why `secrets.py` has to be copied over
 first. To drop into the REPL instead:
 
 ```bash
-python -m mpremote connect auto repl
+python -m mpremote connect id:7BE7DD09548134C0 repl
 ```
 
 To confirm the board is seen at all, and check what it's running:
@@ -146,7 +166,7 @@ Jumper **GP0 to GP1** and the bridge echoes back everything you send, which
 proves the whole path (TCP in → UART out → UART in → TCP out):
 
 ```bash
-python -m mpremote connect auto run micropython/serial_bridge.py
+python -m mpremote connect id:7BE7DD09548134C0 run micropython/serial_bridge.py
 ```
 
 Then from another terminal, connect with any TCP client and type — it comes
@@ -155,13 +175,13 @@ straight back.
 ### Run it
 
 ```bash
-python -m mpremote connect auto run micropython/serial_bridge.py
+python -m mpremote connect id:7BE7DD09548134C0 run micropython/serial_bridge.py
 ```
 
 To start automatically on power-up, copy it as `main.py` instead:
 
 ```bash
-python -m mpremote connect auto fs cp micropython/serial_bridge.py :main.py
+python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/serial_bridge.py :main.py
 ```
 
 Then point the sender's TCP adapter at the board's address on port 23. The
@@ -172,6 +192,37 @@ onboard LED reports state at a glance:
 | Fast blink | No WiFi — reconnecting |
 | Slow heartbeat | Online, no client connected |
 | Solid | Client attached, bridging |
+
+### Measured performance
+
+Loopback (GP0→GP1), 50 status polls plus a 4880-byte / 200-line G-code stream:
+
+| | |
+|---|---|
+| Round trip, median | **7.5 ms** |
+| Round trip, p95 | **18.9 ms** |
+| Round trip, worst | ~1000 ms (see below) |
+| Stream integrity | byte-for-byte identical, every run |
+
+Median and p95 are comfortably inside a 10–20 Hz status poll. Integrity never
+failed — no dropped or reordered bytes in any test, including bare `0x18` and
+newline-less `?` bytes.
+
+**About the ~1 s outliers.** They are not the bridge. ICMP ping to the same
+board, which is answered by lwIP without touching any Python, measures a
+median of 5 ms and p95 of 16 ms — but shows **1% packet loss** over 200
+packets. One lost TCP segment costs a retransmission timeout of roughly a
+second, which is exactly the outlier size observed. The cause is 2.4 GHz
+congestion: a scan here found four APs sharing channel 6 with this network.
+
+If it bothers you, move the AP to a clearer channel (channel 1 was far quieter
+in the scan) or reposition the board. Don't go looking for it in the code.
+
+> **This bridge is not a safety path.** With any packet loss, a feed hold sent
+> over WiFi can arrive a second late. That is fine for jogging, streaming, and
+> status, and not fine as an emergency stop. Keep a hardwired physical E-stop
+> on the machine — WiFi is a convenience layer, never the thing standing
+> between you and a crash.
 
 ### Design notes
 
@@ -192,6 +243,14 @@ onboard LED reports state at a glance:
   `dropped` in the periodic stats line.
 - **WiFi self-heals.** A watchdog rejoins on link loss — it's going to be
   bolted to a machine, not sitting on a desk.
+- **Radio power saving is off.** The CYW43 defaults to dozing between beacons,
+  which is right for a sensor posting once a minute and wrong here — it adds
+  latency on top of the baseline for no benefit on a mains-powered bridge.
+- **The status LED is written only on state change.** It lives on the CYW43,
+  not an RP2350 GPIO, so every write is an SPI transaction contending with the
+  radio. Rewriting "on" every 200 ms while a client was attached measurably
+  hurt the latency tail — fixing that moved p95 from 63.6 ms to 18.9 ms. Set
+  `STATUS_LED = False` to remove it from the picture entirely.
 
 ## Windows Store Python PATH
 

@@ -15,7 +15,11 @@ useful before you've decided on credentials.
 
 Run it without installing anything on the board:
 
-    python -m mpremote connect auto run smoke_test.py
+    python -m mpremote connect id:7BE7DD09548134C0 run smoke_test.py
+
+Target the board by ID, not `connect auto` - auto grabs the first USB serial
+device, which can be an attached CNC controller rather than the Pico. Run
+`python -m mpremote devs` to list boards; Pico reports a 2e8a: vendor ID.
 
 Note that `run` executes this file from your PC but imports resolve on the
 board, so `secrets.py` does need to be copied over first.

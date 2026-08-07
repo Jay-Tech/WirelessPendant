@@ -15,12 +15,12 @@ hold. Nothing here waits for '\\n'.
 
 Deploy:
 
-    python -m mpremote connect auto fs cp micropython/secrets.py :secrets.py
-    python -m mpremote connect auto run micropython/serial_bridge.py
+    python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/secrets.py :secrets.py
+    python -m mpremote connect id:7BE7DD09548134C0 run micropython/serial_bridge.py
 
 To make it start on power-up, copy it as main.py instead:
 
-    python -m mpremote connect auto fs cp micropython/serial_bridge.py :main.py
+    python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/serial_bridge.py :main.py
 
 Wiring (Pico pin numbers are physical pins, not GPIO numbers):
 
@@ -65,6 +65,11 @@ WIFI_JOIN_TIMEOUT_S = 20
 WIFI_CHECK_INTERVAL_S = 5
 STATS_INTERVAL_S = 30
 
+# The status LED is driven over SPI on the CYW43, sharing the bus with the
+# radio. Writing it is cheap but not free; set False to take it out of the
+# picture entirely if you are chasing latency.
+STATUS_LED = True
+
 # --- state ---------------------------------------------------------------
 
 uart = None
@@ -93,6 +98,17 @@ def wifi_connect():
     if wlan is None:
         wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
+
+    # Disable WiFi power management. The CYW43 defaults to a power-saving mode
+    # that lets the radio doze between beacons, which is fine for a sensor
+    # posting once a minute and awful here: it adds latency spikes of 80-100 ms
+    # on top of an ~8 ms baseline. That shows up as a stuttering DRO and, on a
+    # feed hold, as a delay you can feel. A mains-powered bridge has no reason
+    # to save power.
+    try:
+        wlan.config(pm=network.WLAN.PM_NONE)
+    except Exception as exc:
+        log("note: could not disable wifi power save: {}".format(exc))
 
     if wlan.isconnected():
         return wlan.ifconfig()[0]
@@ -246,23 +262,36 @@ async def uart_to_net():
 
 
 async def status_led():
-    """fast blink = no wifi, slow heartbeat = idle, solid = client attached."""
-    # Explicit on/off rather than toggle(): the LED is a CYW43 pin, not an
-    # RP2350 GPIO, and does not carry the full machine.Pin method set.
+    """fast blink = no wifi, slow heartbeat = idle, solid = client attached.
+
+    Every write here is an SPI transaction to the CYW43 - the LED is on the
+    WiFi chip, not an RP2350 GPIO - so it contends with the radio for the same
+    bus and driver lock. Writing only on an actual state change keeps that
+    traffic to a few transactions per session instead of one every 200 ms for
+    the whole time a client is attached.
+    """
     led = machine.Pin("LED", machine.Pin.OUT)
-    phase = False
+    lit = None
+
+    def show(on):
+        nonlocal lit
+        if lit is not on:
+            led.on() if on else led.off()
+            lit = on
+
     while True:
+        if not STATUS_LED:
+            return
         if wlan is None or not wlan.isconnected():
-            phase = not phase
-            led.on() if phase else led.off()
+            show(not lit)
             await asyncio.sleep_ms(100)
         elif client is None:
-            led.on()
+            show(True)
             await asyncio.sleep_ms(50)
-            led.off()
+            show(False)
             await asyncio.sleep_ms(1950)
         else:
-            led.on()
+            show(True)  # solid, and written exactly once
             await asyncio.sleep_ms(200)
 
 
