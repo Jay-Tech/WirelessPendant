@@ -145,6 +145,25 @@ It listens on **port 23**, grblHAL's telnet convention, and moves raw bytes
 with no interpretation — so a sender that already speaks TCP connects to it
 unmodified.
 
+### Does your controller actually need this?
+
+The bridge assumes a controller with an **exposed spare UART**. Many grblHAL
+boards don't have one, and two common ones don't:
+
+| Board | Verdict |
+|---|---|
+| **Sienci SLB / SLB-EXT** | **Not needed.** Has Ethernet and runs grblHAL's networking plugin, already serving telnet on port 23. Point the sender straight at it. |
+| **Expatria Flexi-HAL** | **Not usable.** No spare UART header. Expansion is an I2C real-time control port, RS485 for VFD, RJ45s for encoder/buttons/limits, and an RPi GPIO header wired for Remora SPI. USB-C is the only comms path. |
+
+grblHAL's MPG mode needs a serial stream plus a mode-switch pin, so a board
+with no broken-out UART can't use it however the firmware is compiled.
+
+This bridge is for controllers that *do* expose a UART. If yours doesn't, the
+options are the I2C keypad/pendant interface (real-time commands only — jog and
+overrides, not G-code streaming), or USB host on the RP2350 to bridge the
+controller's own USB port, which is a C SDK / TinyUSB project rather than a
+MicroPython one.
+
 ### Wiring
 
 | Pico | | Controller |
