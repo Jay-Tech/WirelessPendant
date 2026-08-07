@@ -408,6 +408,22 @@ The self-test drives synthetic handwheel motion — an out-and-back sweep on X, 
 one-way Z move, buttons — and checks the DRO the sender reports back actually
 follows. It needs no encoder or display wired.
 
+### Running it
+
+```bash
+python tools/run_pendant.py
+```
+
+Syncs the board then starts the pendant. Both steps in one because forgetting
+either is silent and misleading: no sync runs stale modules, and no run looks
+exactly like a pendant that is broken rather than one that was never started.
+
+Nothing auto-starts — there is deliberately no `main.py`, so the board always
+boots to a free REPL. Copying `pendant.py` as `main.py` would make it run at
+power-up, but it also holds the REPL from boot, so recovering means catching
+the gap before the script starts or reflashing. Worth an escape hatch (skip
+startup if a button is held) before doing that.
+
 ### Jog behaviour — open question
 
 Two philosophies, and which feels right is a question for a real machine:
