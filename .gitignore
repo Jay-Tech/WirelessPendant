@@ -1,0 +1,60 @@
+# --- Pico C/C++ SDK (CMake) ---
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Build artifacts
+*.uf2
+*.elf
+*.bin
+*.hex
+*.map
+*.dis
+*.o
+*.a
+
+# Generated PIO headers
+*.pio.h
+
+# Vendored SDK, if it ever lands here instead of being referenced via PICO_SDK_PATH
+pico-sdk/
+pico-examples/
+
+# --- MicroPython / CircuitPython ---
+__pycache__/
+*.py[cod]
+*.mpy
+.venv/
+venv/
+
+# CircuitPython drive metadata, if a board gets mounted into the tree
+.fseventsd/
+.metadata_never_index
+.Trashes
+boot_out.txt
+
+# --- Editors / tooling ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/c_cpp_properties.json
+.idea/
+*.code-workspace
+
+# --- OS junk ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Local, machine-specific ---
+*.local
+secrets.py
+wifi_config.py
+.env
