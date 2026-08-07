@@ -271,6 +271,66 @@ in the scan) or reposition the board. Don't go looking for it in the code.
   hurt the latency tail — fixing that moved p95 from 63.6 ms to 18.9 ms. Set
   `STATUS_LED = False` to remove it from the picture entirely.
 
+## Wireless pendant (in progress)
+
+A handheld MPG pendant — handwheel, buttons, display — that talks over WiFi to
+the **sender application**, not to the controller:
+
+```
+  Pico 2 W pendant  --WiFi-->  GrblHAL Sender (PC)  --Ethernet/USB-->  controller
+```
+
+### Why not straight to the controller
+
+The obvious design — pendant connects directly to the machine over the network —
+does not work, for two independent reasons:
+
+- **grblHAL's telnet server accepts exactly one client.** `telnetd.c` refuses a
+  second connection outright (`if(session->pcb) return ERR_CONN;`). The sender
+  already holds that session, so the pendant cannot have one.
+- **On an SLB, the board isn't reachable anyway.** Sienci documents a direct
+  PC-to-board Ethernet cable on a static `192.168.5.x` subnet. That link is an
+  isolated segment with no route from the WiFi network.
+
+Going through the sender avoids both, works with any controller, and keeps the
+sender as the single arbiter of the command queue — which is what GRBL requires
+regardless of transport.
+
+### Encoder wiring
+
+> **The RP2350 is not 5 V tolerant.** A 5 V handwheel can damage a GPIO. Check
+> which output type yours has before wiring it.
+
+| Output type | How to tell | Wiring |
+|---|---|---|
+| NPN open-collector (most common) | Floats when idle, no voltage until pulled up | A/B direct to GPIO with a **4.7 kΩ pull-up to 3.3 V** |
+| Push-pull / line driver | Actively drives ~5 V | Level shifter, or a 10 k/20 k divider (5 V × 20/30 = 3.33 V) |
+
+Power the wheel from **VBUS** (pin 40, USB 5 V) and share ground with the Pico.
+With an external pull-up the input is actively driven high, which also keeps
+erratum E9 out of the picture — that latch-up needs a weak or floating pull-down.
+
+Defaults are GP2 = A, GP3 = B.
+
+### Verifying the decoder
+
+Decode logic runs on a PC with no board attached — it stubs `machine` and
+drives the real class, so the test can't drift from the code:
+
+```bash
+python tools/test_quadrature.py
+```
+
+The hardware path (pin config, hard IRQ dispatch, speed headroom) needs two
+jumpers, GP16→GP2 and GP17→GP3, which synthesise quadrature and read it back:
+
+```bash
+python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_quadrature.py
+```
+
+It reports where edges start getting missed. A hand-turned 100 PPR wheel peaks
+around 2000 edges/s, so there should be a lot of margin above it.
+
 ## Windows Store Python PATH
 
 Optional — only if you want to type `mpremote` instead of `python -m mpremote`.
