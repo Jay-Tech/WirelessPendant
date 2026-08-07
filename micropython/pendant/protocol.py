@@ -84,8 +84,8 @@ def zero(axis):
     return {"t": T_ZERO, "axis": axis}
 
 
-def mode(axis, step):
-    """Announce the pendant's selected axis and step size.
+def mode(axis, step, halt_on_stop=True):
+    """Announce the pendant's selected axis, step size and jog behaviour.
 
     Axis and step never leave the pendant otherwise - they only change what
     future jog messages say - which leaves the sender unable to show the
@@ -93,7 +93,7 @@ def mode(axis, step):
     message per change and makes the pendant's state visible where the
     operator is looking.
     """
-    return {"t": T_MODE, "axis": axis, "step": step}
+    return {"t": T_MODE, "axis": axis, "step": step, "halt": bool(halt_on_stop)}
 
 
 def ping(seq):

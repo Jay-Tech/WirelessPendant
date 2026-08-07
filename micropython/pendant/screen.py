@@ -102,13 +102,13 @@ class DroScreen:
             self._positions[axis] = Field(self.display, big, 30, y, 9)
 
         self._state = Field(self.display, small, 8, 170, 10, color=GREEN)
-        self._mode = Field(self.display, small, 8, 194, 14, color=WHITE)
+        self._mode = Field(self.display, small, 8, 194, 16, color=WHITE)
         self._link = Field(self.display, small, 8, 218, 14, color=AMBER)
 
         self._last_position = {}
         self.set_position((0.0, 0.0, 0.0))
         self.set_state("?")
-        self.set_mode("?", 0.0)
+        self.set_mode("?", 0.0, True)
         self.set_link(False)
 
     def set_position(self, values):
@@ -121,8 +121,13 @@ class DroScreen:
     def set_state(self, state):
         self._state.set(state, STATE_COLORS.get(state, WHITE))
 
-    def set_mode(self, axis, step):
-        self._mode.set("{} {}mm".format(axis, step))
+    def set_mode(self, axis, step, halt_on_stop=True):
+        # HALT: stopping the wheel flushes queued motion. QUEUE: every detent
+        # is honoured and the machine finishes what it was given. Shown because
+        # the two feel different enough that guessing which is active while
+        # standing at the machine is worse than the space it costs.
+        self._mode.set("{} {}mm {}".format(
+            axis, step, "HALT" if halt_on_stop else "QUEUE"))
         # Highlight the selected axis label so the operator can see what the
         # wheel will move without reading the smaller mode line.
         for name, field in self._labels.items():

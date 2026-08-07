@@ -14,8 +14,11 @@ To run on power-up, copy the modules to the board and this file as main.py:
 
     python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/pendant/pendant.py :main.py
 
-No display or buttons are required. Axis and step size are set below and can be
-changed live from the REPL via the module-level `scheduler` object.
+No display or buttons are required; both degrade to nothing if absent.
+
+Note that there is no REPL available while this runs - `mpremote run` holds the
+serial port for the whole session - so anything meant to be adjustable while
+jogging has to be on a button, not a variable.
 """
 
 import asyncio
@@ -98,6 +101,16 @@ def handle_button(action, event):
         cancel = scheduler.set_axis(AXIS_ORDER[(index + 1) % len(AXIS_ORDER)])
         link.log("axis -> {}".format(scheduler.axis))
         return cancel
+
+    # Holding the axis button toggles jog behaviour. On a button rather than a
+    # constant because the two only differ by feel, and the comparison has to
+    # happen standing at the machine - `mpremote run` holds the serial port for
+    # the whole session, so there is no REPL available to flip it live.
+    if event == LONG_PRESS and action == "axis_next":
+        scheduler.cancel_on_stop = not scheduler.cancel_on_stop
+        link.log("jog mode -> {}".format(
+            "HALT on stop" if scheduler.cancel_on_stop else "QUEUE and execute"))
+        return None
 
     if event == PRESS and action == "step_up":
         link.log("step -> {} mm".format(scheduler.step_up()))
@@ -182,7 +195,8 @@ async def refresh_display():
         try:
             screen.set_link(pendant_link.connected if pendant_link else False)
             screen.set_state(state["machine_state"])
-            screen.set_mode(scheduler.axis, scheduler.step)
+            screen.set_mode(scheduler.axis, scheduler.step,
+                            scheduler.cancel_on_stop)
             if state["dro"]:
                 screen.set_position(state["dro"])
         except Exception as exc:
@@ -202,11 +216,12 @@ async def publish_mode():
     while True:
         if pendant_link is not None and pendant_link.connected:
             current = (scheduler.axis, scheduler.step,
+                       scheduler.cancel_on_stop,
                        pendant_link.stats["sessions"])
             if current != last:
                 last = current
-                pendant_link.send(
-                    protocol.mode(scheduler.axis, scheduler.step))
+                pendant_link.send(protocol.mode(
+                    scheduler.axis, scheduler.step, scheduler.cancel_on_stop))
         await asyncio.sleep_ms(100)
 
 
