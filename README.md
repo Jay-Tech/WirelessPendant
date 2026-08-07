@@ -110,6 +110,89 @@ Six stages, each reporting PASS / FAIL / SKIP with a summary at the end:
 The last three need `secrets.py`; without it they report SKIP and the rest
 still runs, so the script is useful before you've picked a network.
 
+## Serial → WiFi bridge
+
+[`micropython/serial_bridge.py`](micropython/serial_bridge.py) turns the Pico
+into a transparent bridge between a grblHAL/GRBL controller's UART and TCP,
+making a USB-only board networked:
+
+```
+GRBL controller  --UART-->  Pico 2 W  --TCP:23-->  sender application
+                 <--UART--            <---------
+```
+
+It listens on **port 23**, grblHAL's telnet convention, and moves raw bytes
+with no interpretation — so a sender that already speaks TCP connects to it
+unmodified.
+
+### Wiring
+
+| Pico | | Controller |
+|---|---|---|
+| GP0 (pin 1) | TX → | RX |
+| GP1 (pin 2) | RX ← | TX |
+| GND (pin 3) | — | GND |
+
+Common ground is required, not optional — without it the UART sees noise.
+
+> **3.3 V only.** The RP2350 is not 5 V tolerant. Most grblHAL boards (STM32,
+> Teensy, ESP32) are 3.3 V and wire straight through. A 5 V controller — an
+> Arduino Uno/Nano running classic GRBL — needs a level shifter on the Pico's
+> RX line or it will damage the pin.
+
+### Test it with no controller attached
+
+Jumper **GP0 to GP1** and the bridge echoes back everything you send, which
+proves the whole path (TCP in → UART out → UART in → TCP out):
+
+```bash
+python -m mpremote connect auto run micropython/serial_bridge.py
+```
+
+Then from another terminal, connect with any TCP client and type — it comes
+straight back.
+
+### Run it
+
+```bash
+python -m mpremote connect auto run micropython/serial_bridge.py
+```
+
+To start automatically on power-up, copy it as `main.py` instead:
+
+```bash
+python -m mpremote connect auto fs cp micropython/serial_bridge.py :main.py
+```
+
+Then point the sender's TCP adapter at the board's address on port 23. The
+onboard LED reports state at a glance:
+
+| LED | Meaning |
+|---|---|
+| Fast blink | No WiFi — reconnecting |
+| Slow heartbeat | Online, no client connected |
+| Solid | Client attached, bridging |
+
+### Design notes
+
+- **Byte-level, never line-buffered.** GRBL's real-time commands (`?`, `!`,
+  `~`, `0x18`, and the `0x8x` overrides) are single bytes that arrive mid-line
+  and must act immediately. Waiting for `\n` would break status polling and
+  delay a feed hold.
+- **Nagle is disabled** (`TCP_NODELAY`). Otherwise a lone `?` gets held back
+  waiting for company, adding tens of ms to every status poll and making the
+  DRO stutter. If the socket option isn't available the bridge logs a warning
+  and continues.
+- **One client at a time; newest wins.** GRBL is single-session — two senders
+  would interleave commands and corrupt parser state. New connections evict
+  the old one because the usual cause is a stale half-open socket from a
+  crashed client, and refusing would lock you out until it timed out.
+- **UART is drained when nobody's connected**, so a session always starts on a
+  clean message boundary instead of mid-line. Those bytes are counted as
+  `dropped` in the periodic stats line.
+- **WiFi self-heals.** A watchdog rejoins on link loss — it's going to be
+  bolted to a machine, not sitting on a desk.
+
 ## Windows Store Python PATH
 
 Optional — only if you want to type `mpremote` instead of `python -m mpremote`.
@@ -135,5 +218,9 @@ Restart the terminal afterwards. Existing sessions keep the old PATH.
 ```
 micropython/
   smoke_test.py         staged board bring-up check
+  serial_bridge.py      transparent UART <-> TCP bridge for grblHAL
   secrets.example.py    WiFi credentials template -> copy to secrets.py
 ```
+
+Credentials live in `secrets.py`, which is gitignored. `secrets.example.py` is
+tracked — keep the placeholders in it and never put real values there.
