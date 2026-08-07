@@ -15,7 +15,7 @@ useful before you've decided on credentials.
 
 Run it without installing anything on the board:
 
-    mpremote connect auto run smoke_test.py
+    python -m mpremote connect auto run smoke_test.py
 
 Note that `run` executes this file from your PC but imports resolve on the
 board, so `secrets.py` does need to be copied over first.
@@ -65,7 +65,8 @@ def identity():
     uname = os.uname()
     print("  firmware:   {}".format(uname.version))
     print("  port:       {} / {}".format(uname.sysname, uname.machine))
-    print("  python:     {}".format(".".join(str(n) for n in sys.implementation.version)))
+    version = ".".join(str(n) for n in sys.implementation.version[:3])
+    print("  python:     {}".format(version))
     print("  clock:      {:.1f} MHz".format(machine.freq() / 1000000))
     print("  unique id:  {}".format(binascii.hexlify(machine.unique_id()).decode()))
 

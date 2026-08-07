@@ -7,7 +7,10 @@ gitignored, so your credentials never reach a commit.
 
 Then copy it to the board alongside the smoke test:
 
-    mpremote connect auto fs cp secrets.py :secrets.py
+    python -m mpremote connect auto fs cp secrets.py :secrets.py
+
+Edit the values below before running anything - leaving the placeholders in
+place makes the WiFi stages fail with "no such network in range".
 """
 
 WIFI_SSID = "your-network-name"

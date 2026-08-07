@@ -48,20 +48,29 @@ Uses [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html
 pip install mpremote
 ```
 
+Commands below invoke it as `python -m mpremote` rather than the bare
+`mpremote`. On Windows with Microsoft Store Python, the `Scripts\` directory
+holding `mpremote.exe` is not on `PATH`, so the bare command fails with
+*"not recognized as the name of a cmdlet"* even though the install succeeded.
+The `-m` form sidesteps that and works on every platform. See
+[PATH fix](#windows-store-python-path) if you want the short command back.
+
 Set up credentials (this file is gitignored — it never reaches a commit):
 
 ```bash
 cp micropython/secrets.example.py micropython/secrets.py
 ```
 
-Edit it, then copy it to the board and run the test:
+**Edit it before running anything.** Leaving the placeholder SSID in place
+makes `wifi_join` fail with `no such network in range`. Then copy it to the
+board and run the test:
 
 ```bash
-mpremote connect auto fs cp micropython/secrets.py :secrets.py
+python -m mpremote connect auto fs cp micropython/secrets.py :secrets.py
 ```
 
 ```bash
-mpremote connect auto run micropython/smoke_test.py
+python -m mpremote connect auto run micropython/smoke_test.py
 ```
 
 `run` streams the script from your PC rather than installing it, but imports
@@ -69,8 +78,18 @@ still resolve on the board — which is why `secrets.py` has to be copied over
 first. To drop into the REPL instead:
 
 ```bash
-mpremote connect auto repl
+python -m mpremote connect auto repl
 ```
+
+To confirm the board is seen at all, and check what it's running:
+
+```bash
+python -m mpremote devs
+```
+
+A Pico 2 W shows a `2e8a:` vendor ID. PID `0005` means MicroPython is already
+flashed and talking; PID `000f` means the board is sitting in RP2350 BOOTSEL
+mode waiting for a UF2.
 
 Prefer a GUI? [Thonny](https://thonny.org/) works well: set the interpreter to
 *MicroPython (Raspberry Pi Pico)* and it handles the board filesystem for you.
@@ -90,6 +109,26 @@ Six stages, each reporting PASS / FAIL / SKIP with a summary at the end:
 
 The last three need `secrets.py`; without it they report SKIP and the rest
 still runs, so the script is useful before you've picked a network.
+
+## Windows Store Python PATH
+
+Optional — only if you want to type `mpremote` instead of `python -m mpremote`.
+
+Microsoft Store Python installs console scripts into a sandboxed per-user
+directory that the Store's PATH shim doesn't cover. Find it with:
+
+```bash
+python -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))"
+```
+
+Then append that one directory to your **user** PATH (this reads and writes
+only the user scope, so it can't clobber the machine PATH):
+
+```powershell
+$s = python -c "import sysconfig; print(sysconfig.get_path('scripts','nt_user'))"; [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';' + $s, 'User')
+```
+
+Restart the terminal afterwards. Existing sessions keep the old PATH.
 
 ## Layout
 
