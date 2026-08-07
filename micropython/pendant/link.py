@@ -1,0 +1,268 @@
+"""Network link from the pendant to the sender application.
+
+Joins WiFi, holds a TCP session to the sender, and reconnects on its own. The
+pendant is the client here: the sender is a fixed, always-on machine and the
+pendant is the thing that wanders off, loses signal and gets switched off.
+
+Three concerns this handles that a plain socket does not:
+
+* **Silent death.** A TCP session whose peer vanished - PC asleep, AP dropped -
+  stays open for minutes before the stack notices. On a pendant that reads as
+  a handwheel that has simply stopped working. A ping every few seconds plus a
+  receive deadline turns it into a fast, visible reconnect.
+* **Backpressure.** The outbound queue is bounded and drops oldest. A pendant
+  that cannot reach the sender must never grow a backlog of stale jog commands
+  that all execute at once when the link returns.
+* **Latency.** Nagle is disabled, for the same reason as in the serial bridge:
+  single small messages are the entire traffic pattern here.
+"""
+
+import asyncio
+import time
+
+import network
+
+try:
+    import protocol
+except ImportError:  # running as a package rather than from the board root
+    from pendant import protocol
+
+
+WIFI_JOIN_TIMEOUT_S = 20
+
+PING_INTERVAL_S = 3
+# Must clear several ping intervals so one lost packet on a congested 2.4 GHz
+# channel does not tear down a working session.
+RX_TIMEOUT_S = 10
+
+RECONNECT_DELAY_S = 1
+RECONNECT_DELAY_MAX_S = 15
+
+# Deep enough to ride out a brief stall, short enough that anything still
+# queued when the link returns is recent enough to be worth sending.
+QUEUE_LIMIT = 32
+
+
+def log(msg):
+    print("[{:>6}] {}".format(time.ticks_ms() // 1000, msg))
+
+
+def wifi_connect(ssid, password, hostname=None):
+    """Join WiFi and return the IP, or None. Safe to call when already up."""
+    if hostname:
+        network.hostname(hostname)
+
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+
+    # Power saving costs latency spikes for no benefit while jogging; see the
+    # serial bridge notes for the measurements behind this.
+    try:
+        wlan.config(pm=network.WLAN.PM_NONE)
+    except Exception:
+        pass
+
+    if wlan.isconnected():
+        return wlan.ifconfig()[0]
+
+    log("joining {!r}...".format(ssid))
+    wlan.connect(ssid, password)
+
+    failures = {
+        network.STAT_WRONG_PASSWORD: "wrong password",
+        network.STAT_NO_AP_FOUND: "no such network in range",
+        network.STAT_CONNECT_FAIL: "association failed",
+    }
+
+    deadline = time.ticks_add(time.ticks_ms(), WIFI_JOIN_TIMEOUT_S * 1000)
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        status = wlan.status()
+        if status == network.STAT_GOT_IP:
+            ip = wlan.ifconfig()[0]
+            log("online at {} ({} dBm)".format(ip, wlan.status("rssi")))
+            return ip
+        if status in failures:
+            log("wifi failed: {}".format(failures[status]))
+            return None
+        time.sleep_ms(250)
+
+    log("wifi join timed out")
+    return None
+
+
+class PendantLink:
+    """A self-healing message link to the sender."""
+
+    def __init__(self, host, port, on_message=None, queue_limit=QUEUE_LIMIT):
+        self.host = host
+        self.port = port
+        self.on_message = on_message
+        self.connected = False
+        self.stats = {"sent": 0, "received": 0, "dropped": 0, "sessions": 0}
+
+        self._queue = []
+        self._limit = queue_limit
+        self._decoder = protocol.LineDecoder()
+        self._alive = False
+        self._last_rx = 0
+        self._ping_seq = 0
+
+    # --- outbound ---------------------------------------------------------
+
+    def send(self, message):
+        """Queue a message. Drops the oldest if the queue is already full."""
+        if len(self._queue) >= self._limit:
+            self._queue.pop(0)
+            self.stats["dropped"] += 1
+        self._queue.append(message)
+
+    async def flush(self, timeout_ms=2000):
+        """Wait for the outbound queue to drain. True if it emptied in time.
+
+        Closing a socket discards whatever is still queued behind it, so any
+        orderly shutdown - or any test that asserts on what the far end
+        received - has to flush first. Without this, the last few messages
+        before a close vanish silently, having already been counted as sent.
+        """
+        deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
+        while self._queue and self._alive:
+            if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+                return False
+            await asyncio.sleep_ms(5)
+        # The queue being empty only means the last write was handed to the
+        # stack; give it a moment to reach the wire before anyone closes.
+        await asyncio.sleep_ms(50)
+        return not self._queue
+
+    async def close(self):
+        """Flush pending messages, then drop the session."""
+        await self.flush()
+        self._alive = False
+        self.connected = False
+
+    # --- session ----------------------------------------------------------
+
+    def _enable_nodelay(self, writer):
+        try:
+            import socket
+
+            sock = getattr(writer, "s", None)
+            if sock is not None:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
+
+    async def _tx(self, writer):
+        next_ping = time.ticks_add(time.ticks_ms(), PING_INTERVAL_S * 1000)
+        try:
+            while self._alive:
+                if self._queue:
+                    message = self._queue.pop(0)
+                    writer.write(protocol.encode(message))
+                    await writer.drain()
+                    self.stats["sent"] += 1
+                    continue
+
+                if time.ticks_diff(next_ping, time.ticks_ms()) <= 0:
+                    self._ping_seq += 1
+                    writer.write(protocol.encode(protocol.ping(self._ping_seq)))
+                    await writer.drain()
+                    self.stats["sent"] += 1
+                    next_ping = time.ticks_add(
+                        time.ticks_ms(), PING_INTERVAL_S * 1000)
+
+                await asyncio.sleep_ms(5)
+        except Exception as exc:
+            log("tx failed: {}: {}".format(type(exc).__name__, exc))
+        finally:
+            # Drop the session so the reader unblocks instead of hanging on a
+            # socket the writer has already given up on.
+            self._alive = False
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def _rx(self, reader):
+        try:
+            while self._alive:
+                chunk = await reader.read(512)
+                if not chunk:
+                    log("sender closed the connection")
+                    break
+                self._last_rx = time.ticks_ms()
+                for message in self._decoder.feed(chunk):
+                    self.stats["received"] += 1
+                    if message.get("t") == protocol.T_PING:
+                        self.send(protocol.pong(message.get("seq", 0)))
+                        continue
+                    if self.on_message:
+                        self.on_message(message)
+        except Exception as exc:
+            log("rx failed: {}: {}".format(type(exc).__name__, exc))
+        finally:
+            self._alive = False
+
+    async def _deadline(self):
+        """Tear the session down if nothing has arrived for RX_TIMEOUT_S.
+
+        Catches the case a plain read cannot: the peer disappearing without
+        closing, where the socket stays readable-but-silent indefinitely.
+        """
+        while self._alive:
+            await asyncio.sleep_ms(500)
+            idle_ms = time.ticks_diff(time.ticks_ms(), self._last_rx)
+            if idle_ms > RX_TIMEOUT_S * 1000:
+                log("no traffic for {}s - assuming link is dead".format(
+                    RX_TIMEOUT_S))
+                self._alive = False
+
+    async def _session(self):
+        log("connecting to {}:{}".format(self.host, self.port))
+        reader, writer = await asyncio.open_connection(self.host, self.port)
+        self._enable_nodelay(writer)
+
+        self._decoder.reset()
+        self._alive = True
+        self._last_rx = time.ticks_ms()
+        self.connected = True
+        self.stats["sessions"] += 1
+        log("connected")
+
+        # Announce ourselves ahead of anything already queued.
+        self._queue.insert(0, protocol.hello())
+
+        tx = asyncio.create_task(self._tx(writer))
+        deadline = asyncio.create_task(self._deadline())
+        try:
+            await self._rx(reader)
+        finally:
+            self._alive = False
+            self.connected = False
+            for task in (tx, deadline):
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            log("disconnected")
+
+    async def run(self):
+        """Hold a session open forever, reconnecting with backoff."""
+        delay = RECONNECT_DELAY_S
+        while True:
+            try:
+                await self._session()
+                delay = RECONNECT_DELAY_S  # a real session resets the backoff
+            except OSError as exc:
+                log("connect failed: {}".format(exc))
+            except Exception as exc:
+                log("session error: {}: {}".format(type(exc).__name__, exc))
+
+            self.connected = False
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, RECONNECT_DELAY_MAX_S)

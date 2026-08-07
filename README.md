@@ -336,6 +336,46 @@ measure A against 0V while turning slowly. It should swing hard between ~0 V
 and ~5 V. If it never reaches 5 V unaided it is open-collector, not a line
 driver, and wants pull-ups instead of dividers.
 
+### Network link
+
+[`link.py`](micropython/pendant/link.py) joins WiFi and holds a TCP session to
+the sender, reconnecting on its own. The pendant is the client: the sender is
+a fixed always-on machine, the pendant is the thing that wanders off and gets
+switched off.
+
+Three things it handles that a plain socket does not:
+
+- **Silent death.** A session whose peer vanished — PC asleep, AP dropped —
+  stays open for minutes before the stack notices, which on a pendant reads as
+  a handwheel that has simply stopped working. A ping every 3 s plus a 10 s
+  receive deadline turns that into a fast, visible reconnect.
+- **Backpressure.** The send queue is bounded and drops oldest. A pendant that
+  can't reach the sender must never build a backlog of stale jog commands that
+  all execute at once when the link returns.
+- **Flush before close.** Closing a socket discards whatever is still queued,
+  so `flush()` exists and any orderly shutdown must call it. Skipping it loses
+  the last few messages silently, after they have already been counted as sent.
+
+### Mock sender
+
+[`tools/mock_sender.py`](tools/mock_sender.py) stands in for the real sender:
+it accepts a pendant, applies incoming jogs to a simulated DRO, and streams
+status back at 10 Hz. Turn the handwheel and the position moves.
+
+```bash
+python tools/mock_sender.py --verbose
+```
+
+Then, with `SENDER_HOST` set in `secrets.py`:
+
+```bash
+python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_link.py
+```
+
+The self-test drives synthetic handwheel motion — an out-and-back sweep on X, a
+one-way Z move, buttons — and checks the DRO the sender reports back actually
+follows. It needs no encoder or display wired.
+
 ### Verifying the decoder
 
 Decode logic runs on a PC with no board attached — it stubs `machine` and
