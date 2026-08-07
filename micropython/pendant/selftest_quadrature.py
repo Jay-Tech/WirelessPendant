@@ -33,8 +33,18 @@ except ImportError:
 READ_A, READ_B = 2, 3
 DRIVE_A, DRIVE_B = 16, 17
 
-# One full quadrature cycle, as (A, B). Reversed for the other direction.
+# States as (A, B), in forward quadrature order starting from parked (0, 0).
 FORWARD = ((0, 0), (0, 1), (1, 1), (1, 0))
+
+# Drive sequences that both start and end at parked (0, 0), so every write is
+# a genuine transition no matter what the pins were doing beforehand. Driving
+# the parked state first instead - the obvious way to write this - produces no
+# edge when the pins already rest there, costing exactly one count and looking
+# deceptively like a missed edge.
+FORWARD_SEQ = FORWARD[1:] + (FORWARD[0],)
+REVERSE_SEQ = tuple(reversed(FORWARD[1:])) + (FORWARD[0],)
+
+EDGES_PER_DETENT = 4
 
 failures = []
 
@@ -47,14 +57,28 @@ def check(label, got, want):
         failures.append(label)
 
 
-def emit(drive_a, drive_b, detents, step_us, reverse=False):
-    """Drive `detents` full cycles, holding each state for step_us."""
-    states = tuple(reversed(FORWARD)) if reverse else FORWARD
+def park(drive_a, drive_b):
+    """Return the drive pins to (0, 0) and let the inputs settle."""
+    drive_a.value(0)
+    drive_b.value(0)
+    time.sleep_ms(2)
+
+
+def drive_cycles(drive_a, drive_b, detents, step_us, reverse=False):
+    """Drive `detents` complete cycles from parked back to parked.
+
+    Returns elapsed microseconds so the caller can report the edge rate that
+    was actually achieved, rather than the one sleep_us was asked for - at
+    short intervals the interpreter's own loop overhead dominates.
+    """
+    sequence = REVERSE_SEQ if reverse else FORWARD_SEQ
+    started = time.ticks_us()
     for _ in range(detents):
-        for a, b in states:
+        for a, b in sequence:
             drive_a.value(a)
             drive_b.value(b)
             time.sleep_us(step_us)
+    return time.ticks_diff(time.ticks_us(), started)
 
 
 def main():
@@ -71,7 +95,9 @@ def main():
     print("  decoder attached, IRQs registered\n")
 
     # Sanity: is anything actually connected?
-    emit(drive_a, drive_b, 2, 500)
+    park(drive_a, drive_b)
+    enc.reset()
+    drive_cycles(drive_a, drive_b, 2, 500)
     time.sleep_ms(10)
     if enc.counts == 0:
         print("  no edges seen - are the jumpers in place?")
@@ -81,44 +107,51 @@ def main():
         return 1
 
     # --- direction and scaling ---
+    park(drive_a, drive_b)
     enc.reset()
-    emit(drive_a, drive_b, 25, 500)
+    drive_cycles(drive_a, drive_b, 25, 500)
     time.sleep_ms(10)
     check("25 detents forward -> counts", enc.counts, 25 * COUNTS_PER_DETENT)
     check("  reads as 25 detents", enc.detents, 25)
     check("  no illegal transitions", enc.errors, 0)
 
+    park(drive_a, drive_b)
     enc.reset()
-    emit(drive_a, drive_b, 25, 500, reverse=True)
+    drive_cycles(drive_a, drive_b, 25, 500, reverse=True)
     time.sleep_ms(10)
     check("25 detents reverse -> counts", enc.counts, -25 * COUNTS_PER_DETENT)
     check("  reads as -25 detents", enc.detents, -25)
+    check("  no illegal transitions", enc.errors, 0)
 
+    park(drive_a, drive_b)
     enc.reset()
-    emit(drive_a, drive_b, 40, 400)
-    emit(drive_a, drive_b, 40, 400, reverse=True)
+    drive_cycles(drive_a, drive_b, 40, 400)
+    drive_cycles(drive_a, drive_b, 40, 400, reverse=True)
     time.sleep_ms(10)
     check("40 forward then 40 back -> net 0", enc.counts, 0)
     check("  no drift across reversal", enc.errors, 0)
 
     # --- speed headroom ---
     # A 60 mm wheel spun hard reaches maybe 5 rev/s. On a 100 PPR wheel that is
-    # 500 detents/s, i.e. 2000 edges/s, i.e. 500 us per state. Push well past
-    # that and find where it actually breaks.
-    print("\n  speed headroom (100 detents per run):")
-    print("    {:>9}  {:>11}  {:>8}  {:>7}".format(
-        "us/state", "edges/s", "detents", "errors"))
-    for step_us in (500, 200, 100, 50, 20, 10):
+    # 500 detents/s, i.e. 2000 edges/s. Push well past that and find where it
+    # actually breaks. Rates are measured, not assumed: below roughly 50 us the
+    # interpreter's loop overhead sets the pace, not the requested delay.
+    print("\n  speed headroom (100 detents per run, rates measured):")
+    print("    {:>9}  {:>13}  {:>8}  {:>7}".format(
+        "us/state", "real edges/s", "detents", "errors"))
+    for step_us in (500, 200, 100, 50, 20, 10, 0):
+        park(drive_a, drive_b)
         enc.reset()
-        emit(drive_a, drive_b, 100, step_us)
+        elapsed_us = drive_cycles(drive_a, drive_b, 100, step_us)
         time.sleep_ms(10)
-        edges_per_s = 1000000 // step_us
+        edges = 100 * EDGES_PER_DETENT
+        rate = (edges * 1000000) // elapsed_us if elapsed_us else 0
         ok = "ok" if enc.detents == 100 and enc.errors == 0 else "MISSED"
-        print("    {:>9}  {:>11}  {:>8}  {:>7}  {}".format(
-            step_us, edges_per_s, enc.detents, enc.errors, ok))
+        print("    {:>9}  {:>13}  {:>8}  {:>7}  {}".format(
+            step_us, rate, enc.detents, enc.errors, ok))
 
-    print("\n  a hand-turned wheel sits near the 500 us row;")
-    print("  everything above that is margin.")
+    print("\n  a hand-turned 100 PPR wheel peaks near 2000 edges/s;")
+    print("  everything above that row is margin.")
 
     enc.deinit()
     drive_a.value(0)
