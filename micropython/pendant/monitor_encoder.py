@@ -40,9 +40,11 @@ def main():
 
     print("  idle levels: A={} B={}  (both should be 0 or 1, not floating)".format(
         pin_a.value(), pin_b.value()))
-    print("\n  turn the wheel - Ctrl-C to stop\n")
-    print("  {:>9} {:>9} {:>8} {:>10} {:>7}".format(
-        "detents", "counts", "errors", "detents/s", "dir"))
+    print("\n  turn the wheel - Ctrl-C to stop")
+    print("  one click is 4 counts; a click landing across a sample boundary")
+    print("  shows as two rows summing to 4 (1+3, 2+2), which is not an error\n")
+    print("  {:>9} {:>9} {:>7} {:>8} {:>10} {:>6}".format(
+        "detents", "counts", "d.count", "errors", "detents/s", "dir"))
 
     last_counts = 0
     last_time = time.ticks_ms()
@@ -71,8 +73,9 @@ def main():
             else:
                 direction = "-"
 
-            print("  {:>9} {:>9} {:>8} {:>10.1f} {:>7}".format(
-                encoder.detents, counts, encoder.errors, rate, direction))
+            print("  {:>9} {:>9} {:>+7} {:>8} {:>10.1f} {:>6}".format(
+                encoder.detents, counts, delta, encoder.errors, rate,
+                direction))
 
     except KeyboardInterrupt:
         pass

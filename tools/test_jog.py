@@ -95,6 +95,28 @@ for _ in range(20):
         total += message["det"]
 check("slow steady turn loses no motion over 20 ticks", total, 10)
 
+print("\nrest dither")
+
+# Observed on real hardware: a wheel coming to rest on a quadrature edge
+# toggles one channel back and forth from vibration alone. These are legal
+# transitions - the decoder's error count stays at zero - so the scheduler is
+# what has to reject them, or a stationary wheel would trickle out jogs.
+enc, sched = new_scheduler()
+messages = []
+for i in range(20):
+    enc.move(1 if i % 2 == 0 else -1)
+    messages.append(sched.tick())
+check("+/-1 dither at rest emits nothing", messages, [None] * 20)
+
+# Dither that never accumulates must also never look like motion, so it must
+# not arm the idle timer and produce a stray cancel either.
+check("  and never triggers a cancel", sched.stats["cancels"], 0)
+
+# Real motion still gets through immediately afterwards.
+enc.move(4)
+check("  and real motion still registers after dithering",
+      sched.tick(), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
+
 print("\njog cancel")
 
 enc, sched = new_scheduler()
