@@ -306,7 +306,11 @@ MOVING_GRACE_TICKS = 3
 
 TRACE_TICKS = 24            # how much history to keep either side
                             # (ticks, not time - this is a display width)
-TRACE_QUIET_TICKS = 100     # minimum gap between dumps, so one stall is one dump
+# Minimum gap between dumps, so one stall produces one dump rather than a
+# screenful. In ticks, but sized in time - at 100 it was five seconds at a
+# 50 ms tick and became two when the tick shortened.
+TRACE_QUIET_MS = 5000
+TRACE_QUIET_TICKS = max(1, TRACE_QUIET_MS // TICK_MS)
 TRACE_STUMBLE_RATIO = 0.4   # a tick carrying less than this share of the recent
                             # average, while still turning, is a stumble
 
