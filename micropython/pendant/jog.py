@@ -188,11 +188,29 @@ PLANNER_FILL_RATIO = 2.0
 # felt on stopping.
 #
 # Expressed in time rather than millimetres because that is what it costs to
-# stop: run-off is the buffer emptying at the commanded feed, so a quarter
-# second is a quarter second whether that is 37 mm at F9000 or 10 mm at F2400.
-# Below this bound the depth regulator does as it likes; above it, emission
-# drops to the drain rate no matter how shallow the planner is.
-RUNAHEAD_LIMIT_S = 0.25
+# stop: run-off is the buffer emptying at the commanded feed, so the same
+# fraction of a second is the same feel at any speed. Below this bound the
+# depth regulator does as it likes; above it, emission drops to the drain rate
+# no matter how shallow the planner is.
+#
+# Raised from a quarter second once the tick came down to 20 ms. At a quarter
+# second this was the active limiter rather than a safety net: it allowed 36 mm
+# at F8625 while the measured lag sat at 36 to 79, so emission was pinned at
+# the drain and the planner held three to four blocks. At 3 mm a block that is
+# 9 to 12 mm of chained distance, and holding 150 mm/s needs v^2/a = 15 mm - so
+# the machine could never quite reach the commanded feed.
+#
+# What makes a looser bound safe is that the depth target is now reachable.
+# Six blocks is 18 mm at a 20 ms tick where it was 45 mm at 50 ms, so the fill
+# completes, emission falls back to the drain, and lag stops growing on its
+# own. This is left as a guard for the case where it does not.
+#
+# Note the measured lag is not all backlog: a status report arriving 100 ms
+# late is 15 mm of apparent lag at 150 mm/s with nothing queued behind it. A
+# bound set close to the real figure therefore binds well before the buffer is
+# actually that deep, which is the mistake this had already made once at a fine
+# step.
+RUNAHEAD_LIMIT_S = 0.5
 
 # Floor under that bound, in millimetres.
 #
