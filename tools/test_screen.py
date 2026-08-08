@@ -139,9 +139,14 @@ print("\na taller panel")
 # is what fixed coordinates would have done.
 tall = FakeDisplay(320, 480)
 tall_screen = DroScreen(tall)
-check("status follows the bottom edge", tall_screen._link.y, 480 - 22)
-check("  keeping its spacing", tall_screen._mode.y,
-      tall_screen._link.y - STATUS_PITCH)
+# The status text sits inside the bottom band rather than being measured from
+# the panel edge, so it moves with the band instead of being stranded by it.
+check("status sits inside the bottom band", 400 <= tall_screen._state.y < 480,
+      True)
+check("  with the link line below it", tall_screen._link.y >
+      tall_screen._state.y, True)
+check("  and both inside the panel",
+      tall_screen._link.y + 24 <= 480, True)
 # Rows spread rather than keeping the short panel's pitch. The extra height is
 # what turns each row from a readout into a touch target.
 #
@@ -217,8 +222,10 @@ check("    with the corner clear of every cell",
 
 # Lining up with the link text is what makes the corner look deliberate
 # rather than floating.
-check("  the corner's bottom edge matches the link text",
-      page_bottom, tall_screen._link.y + 16)
+# The corner fills the band's full height rather than floating inside it,
+# which is what makes the bottom of the panel read as finished.
+check("  the corner fills the band", page_bottom, 480)
+check("    and starts where the grid ends", page_top, grid_bottom)
 
 # The corner is reserved whether or not anything acts on it yet, so whatever
 # lands there later inherits settled geometry instead of being retrofitted
@@ -265,6 +272,20 @@ for axis in AXES:
     label = tall_screen._labels[axis]
     check("    the label centred too",
           abs((label.y - by) - (by + bh - (label.y + 24))) <= 1, True)
+
+# Nothing may overhang the panel. The status text grew to the larger glyph when
+# the band did and the corner label deliberately did not - "PAGE" at 24 px is
+# 96 px inside an 80 px corner, which the driver clips silently rather than
+# raising, so it would have shown as a truncated word.
+for _name, _field in (("state", tall_screen._state),
+                      ("link", tall_screen._link),
+                      ("feed", tall_screen._mode)):
+    check("  the {} field clears the corner".format(_name),
+          _field.x + _field.length * _field.glyphs.width <= PAGE_ZONE_X, True)
+
+_r, _b = extent(tall)
+check("  and nothing at all is drawn past the panel",
+      _r <= 320 and _b <= 480, True)
 
 print("\nzone arithmetic")
 

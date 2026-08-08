@@ -71,28 +71,37 @@ TOP_MARGIN = 20
 # is used without looking. Three across is 16.5 mm.
 STEP_ROWS = ((0.001, 0.01, 0.1), (0.5, 1.0))
 
-# The bottom-right corner, reserved for paging. 112 x 68 is 17 x 10.5 mm on
-# this panel, so it clears a fingertip in both directions - a corner target is
-# reached with a thumb while the pendant is held, which is the least accurate
-# way anything here gets pressed.
-PAGE_ZONE_X = 240
-PAGE_ZONE_H = 68
+# The bottom band: status text on the left, the paging corner on the right.
+# Sized to match a step-grid row, so the panel reads as one stack of equal
+# bands rather than a layout with an offcut at the bottom.
+BOTTOM_BAND_H = 80
 
-# Cells for the state text and the feed, sized to what they actually hold.
-# "Alarm" and "Check" are the longest states; "F15000" the longest feed. Both
-# have to fit left of the corner without meeting each other, and 320 px less
-# the corner leaves 232 for the pair.
-STATE_CELLS = 7
+# Below this the panel gets neither a step grid nor a bottom band - there is
+# only room for the position rows and two lines of status. That is the 320x240
+# panel, where the physical buttons are still doing the selecting.
+TALL_PANEL = 400
+
+# Where the corner starts. The status text has to fit to its left: at the
+# larger glyph "LINK DOWN" is nine cells of 24 px, which is 216, and this
+# leaves 232.
+PAGE_ZONE_X = 240
+
+# Cells for the status fields, sized to what they actually hold. "Alarm" and
+# "Check" are the longest states, "LINK DOWN" the longest link text, "F15000"
+# the longest feed. State and feed share a row and must not meet, and neither
+# may reach the corner.
+STATE_CELLS = 5
+LINK_CELLS = 9
 FEED_CELLS = 6
 
-ZONE_ROW_H = 80
-ZONE_GAP = 8
-ZONE_MARGIN = 16
+# Pitch between the two status lines when the band is tall enough for the
+# larger glyph. The smaller STATUS_PITCH would overlap 24 px text.
+STATUS_PITCH_LARGE = 36
 
-# Below this much free height the step grid is left out entirely and the
-# physical step buttons remain the only way to change it. That is the 320x240
-# panel, where the rows and the status block already meet.
-MIN_ZONE_SPACE = ZONE_ROW_H * 2 + ZONE_GAP + ZONE_MARGIN * 2
+# Grid rows tile against each other and against the band below, the same way
+# the position rows tile against the grid. The gap that used to separate them
+# was the last thing on the panel that floated.
+ZONE_ROW_H = 80
 
 
 class Field:
@@ -162,47 +171,47 @@ class DroScreen:
         """
         self.display.fill(BLACK)
 
-        # Two status lines, not three, and a corner left free.
-        #
-        # The third used to carry axis, step and HALT/QUEUE. Axis and step are
-        # now shown by which row and which cell is outlined, so repeating them
-        # in text said nothing the screen was not already saying; HALT/QUEUE
-        # showed a word that has not changed since the jog tuning settled.
-        # What is left is the feed, which is the one thing that varies with how
-        # the wheel is turned and has no other indicator.
-        #
-        # Anchored to the bottom, so a taller panel gives its extra height to
-        # the middle rather than stranding the status off the edge.
-        # Laid out bottom-up, each region placed against the one below it.
+        # Laid out bottom-up, every region flush against the one below it.
         #
         # Positioning two regions independently from opposite ends is what
-        # broke this: the corner was measured from the panel bottom while the
-        # step grid was measured downward from the status text, so dropping the
-        # status from three rows to two moved the grid 24 px and drove it
-        # through the corner - which then drew inside the 1.0 cell.
-        link_y = self.display.height - 22
-        state_y = link_y - STATUS_PITCH
-        status_bottom = link_y + self._small.height
+        # broke this once: the grid was measured downward from the status text
+        # and the corner upward from the panel edge, so changing the number of
+        # status rows moved one and not the other, and drove the corner through
+        # the 1.0 cell. Chaining them means a change to any one shifts the rest
+        # rather than colliding with them.
+        #
+        # Nothing floats. The gaps that used to sit between the position rows
+        # and the grid, between the two grid rows, and under the corner were
+        # each a different constant doing the same job badly - and the sum of
+        # them read as the bottom of the panel being unfinished.
+        band_h = BOTTOM_BAND_H if self.display.height >= TALL_PANEL else 0
+        band_top = self.display.height - band_h
+        zones_top = band_top - ZONE_ROW_H * 2
 
-        # The corner shares the status band's bottom edge, so it lines up with
-        # the link text rather than floating a few pixels above it.
-        page_y = status_bottom - PAGE_ZONE_H
-        zones_top = (page_y - ZONE_MARGIN) - (ZONE_ROW_H * 2 + ZONE_GAP)
-
-        # A tall panel earns a step grid; a short one gives its height to the
-        # position rows and keeps the physical step buttons.
         # Room only counts if the grid still leaves the position rows their
-        # minimum pitch. Below that the grid is dropped entirely.
-        self._zones_shown = zones_top >= TOP_MARGIN + len(AXES) * ROW_PITCH
+        # minimum pitch. Below that the whole bottom half is dropped and the
+        # physical buttons remain the only way to change step.
+        self._zones_shown = (band_h > 0 and
+                             zones_top >= TOP_MARGIN + len(AXES) * ROW_PITCH)
 
         if self._zones_shown:
             # Rows tile the whole span down to the grid, so the two meet
-            # instead of leaving a band of empty panel between the last
-            # border and the first cell.
+            # instead of leaving a band of empty panel between the last border
+            # and the first cell.
             pitch = (zones_top - TOP_MARGIN) // len(AXES)
+            # A taller band earns larger status text. It is the part read at a
+            # glance from arm's length, and on the short panel there was never
+            # room to make it any bigger.
+            status = self._medium
+            status_pitch = STATUS_PITCH_LARGE
+            state_y = band_top + 8
         else:
             zones_top = None
             pitch = ROW_PITCH
+            status = self._small
+            status_pitch = STATUS_PITCH
+            state_y = self.display.height - 22 - STATUS_PITCH
+        link_y = state_y + status_pitch
 
         self.zones.clear()
         self._axis_boxes = {}
@@ -256,33 +265,43 @@ class DroScreen:
         # Indented by 8 like the others it ran 8 px past the right edge, and the
         # driver clamps rather than complains, so the last character was quietly
         # losing its right half.
-        self._state = Field(self.display, self._small, 8, state_y,
+        self._state = Field(self.display, status, 8, state_y,
                             STATE_CELLS, color=GREEN)
-        self._link = Field(self.display, self._small, 8, link_y, 9,
+        self._link = Field(self.display, status, 8, link_y, LINK_CELLS,
                            color=AMBER)
 
-        # Feed sits on the state row, right of the state text and left of the
-        # corner. Right-aligned so the digits do not shuffle as it changes.
+        # Feed shares the state row, right of the state text and left of the
+        # corner, right-aligned so the digits do not shuffle as it changes.
+        #
+        # Kept at the smaller glyph even when the status text grows. At the
+        # larger one, "Alarm" and "F15000" together need eleven cells and the
+        # space left of the corner holds nine - the state would have had to
+        # shrink to fit, and it is the more glanced of the two.
         feed_w = FEED_CELLS * self._small.width
         self._mode = Field(self.display, self._small,
-                           PAGE_ZONE_X - feed_w - 8, state_y, FEED_CELLS,
-                           color=WHITE)
+                           PAGE_ZONE_X - feed_w - 8,
+                           state_y + (status.height - self._small.height) // 2,
+                           FEED_CELLS, color=WHITE)
 
         # The corner. Registered whether or not anything acts on it yet, so the
         # geometry is settled and reserved rather than being retrofitted around
         # whatever lands here later.
         if self._zones_shown:
-            page_box = (PAGE_ZONE_X, page_y,
-                        self.display.width - PAGE_ZONE_X, PAGE_ZONE_H)
+            page_box = (PAGE_ZONE_X, band_top,
+                        self.display.width - PAGE_ZONE_X, band_h)
             self._draw_border(page_box, False)
             self.zones.add("page", page_box[0], page_box[1],
                            page_box[2], page_box[3], "next")
             label = "PAGE"
-            text_x = page_box[0] + (page_box[2]
-                                    - len(label) * self._small.width) // 2
-            text_y = page_y + (PAGE_ZONE_H - self._small.height) // 2
-            Field(self.display, self._small, text_x, text_y,
-                  len(label), color=GREY).set(label)
+            # Small glyph, unlike the status text beside it. "PAGE" at the
+            # larger one is 96 px inside an 80 px corner, so it overhung the
+            # panel edge - and the driver clips rather than complaining, so it
+            # would have shown as a truncated word rather than an error.
+            text_y = band_top + (band_h - self._small.height) // 2
+            Field(self.display, self._small,
+                  page_box[0] + (page_box[2]
+                                 - len(label) * self._small.width) // 2,
+                  text_y, len(label), color=GREY).set(label)
 
         self._last_position = {}
         self.set_position((0.0, 0.0, 0.0))
@@ -294,7 +313,7 @@ class DroScreen:
         """Draw the step grid and register each cell as it is drawn."""
         width = self.display.width
         for row_index, row in enumerate(STEP_ROWS):
-            y = top + row_index * (ZONE_ROW_H + ZONE_GAP)
+            y = top + row_index * ZONE_ROW_H
             # The last cell in a row absorbs the rounding, so the grid reaches
             # the right edge exactly instead of leaving a sliver that belongs
             # to nothing and swallows taps.
