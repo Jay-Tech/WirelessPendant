@@ -109,12 +109,17 @@ FEED_SMOOTHING = 0.25
 # out roughly a third of what seemed reasonable on paper, which says a fine step
 # wants control far more than speed.
 #
-# The coarse ones are the opposite problem. They were limited by a 5000 mm/min
-# ceiling guessed before the machine's real limits were known; X and Y actually
-# do 15000. Sized so a natural wind lands near the rate this machine is normally
-# jogged at - around 9000 mm/min, which 1 mm reaches at 150 detents/s - with
-# headroom above rather than running to the absolute maximum.
-STEP_MAX_FEED = (150.0, 300.0, 950.0, 8000.0, 12000.0)
+# The coarse ones now run to the machine's real limit, because anything less
+# throws away turning the operator is actually doing. Measured on the machine at
+# roughly 4 rev/s - 400 detents/s - the demand is step x 400 x 60:
+#
+#   0.5 mm -> 12000 mm/min, which X and Y can deliver in full
+#   1.0 mm -> 24000 mm/min, which nothing can, so 1 mm sheds ~38% at that speed
+#
+# So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
+# only fully usable below about 250 detents/s. That is a property of the wheel
+# and the machine, not something a ceiling can fix.
+STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 
 # Millimetres of motion allowed to be in flight at once.
 #
