@@ -15,7 +15,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          QUEUE_TICKS, STEP_MAX_FEED, AXIS_MAX_FEED,
-                         FEED_HYSTERESIS)
+                         FEED_HYSTERESIS_UP, FEED_HYSTERESIS_DOWN)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -240,7 +240,26 @@ for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 9)
     faster = sched.tick()
 check("  but still follows a real change in speed",
-      faster["feed"] > settled[-1] * (1 + FEED_HYSTERESIS), True)
+      faster["feed"] > settled[-1] * (1 + FEED_HYSTERESIS_UP), True)
+
+# Reported from the machine: after a stumble the feed stopped matching the hand
+# and stayed rough. A symmetric band strands the feed above the target after any
+# slowdown, and a feed above the commanded rate means every move finishes early
+# and waits - the stutter, self-sustaining until the target falls far enough to
+# leave the band.
+enc, sched = new_scheduler()
+sched.set_step_index(COARSE)
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 5)                      # 250 detents/s
+    quick = sched.tick()
+for _ in range(RATE_WINDOW_TICKS * 3):
+    enc.move(4 * 2)                      # slowed to 100 detents/s
+    slowed = sched.tick()
+commanded = 100 * STEP_SIZES[COARSE] * 60
+check("feed follows a slowdown rather than stranding high",
+      slowed["feed"] <= commanded * (1 + FEED_HYSTERESIS_DOWN) + 1, True)
+check("  having actually come down from the quick feed",
+      slowed["feed"] < quick["feed"], True)
 
 print("\nrest dither")
 

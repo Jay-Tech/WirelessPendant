@@ -113,7 +113,19 @@ FEED_SMOOTHING = 0.25
 # Smoothing does not help: it changes how fast the feed moves, not how often, so
 # every message still carries a different number. Holding the feed until it has
 # genuinely changed produces long runs of identical F, which blend.
-FEED_HYSTERESIS = 0.20
+# Asymmetric on purpose. The two directions of error are not equally harmful:
+#
+#   feed too HIGH - each move finishes early and waits, so the machine stops
+#                   between blocks. This is the stutter, and it persists until
+#                   the target has fallen far enough to leave the band.
+#   feed too LOW  - distance arrives faster than it drains, which the queue
+#                   bound absorbs by dropping. Less pleasant but self-limiting.
+#
+# So rising resists change, to keep consecutive feeds identical and let the
+# planner blend, while falling follows promptly. A symmetric band left the feed
+# stranded high after any slowdown.
+FEED_HYSTERESIS_UP = 0.20
+FEED_HYSTERESIS_DOWN = 0.08
 
 # Ceiling per step size, matching STEP_SIZES.
 #
@@ -335,9 +347,11 @@ class JogScheduler:
         if not self._moving:
             return target
 
-        # Hold the current feed unless the target has moved outside the band.
-        # Identical consecutive feeds are what let the planner blend.
-        if abs(target - self.feed) < self.feed * FEED_HYSTERESIS:
+        # Hold the current feed unless the target has left the band. Identical
+        # consecutive feeds are what let the planner blend.
+        band = (FEED_HYSTERESIS_UP if target > self.feed
+                else FEED_HYSTERESIS_DOWN)
+        if abs(target - self.feed) < self.feed * band:
             return self.feed
 
         feed = self.feed + FEED_SMOOTHING * (target - self.feed)
