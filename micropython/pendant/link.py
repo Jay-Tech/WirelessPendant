@@ -35,6 +35,12 @@ PING_INTERVAL_S = 3
 # channel does not tear down a working session.
 RX_TIMEOUT_S = 10
 
+# A connect that is refused fails at once; one whose SYN is silently dropped -
+# a firewall, or an address with nothing at it - hangs instead. Without a bound
+# the pendant sits there indefinitely saying nothing, which is the least useful
+# way to fail.
+CONNECT_TIMEOUT_S = 8
+
 RECONNECT_DELAY_S = 1
 RECONNECT_DELAY_MAX_S = 15
 
@@ -228,7 +234,16 @@ class PendantLink:
 
     async def _session(self):
         log("connecting to {}:{}".format(self.host, self.port))
-        reader, writer = await asyncio.open_connection(self.host, self.port)
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port),
+                CONNECT_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            log("connect timed out after {}s - nothing answered at {}:{}".format(
+                CONNECT_TIMEOUT_S, self.host, self.port))
+            log("  a refused port fails immediately; a silent timeout means the")
+            log("  SYN was dropped - firewall, or wrong address")
+            raise OSError("connect timeout")
         self._enable_nodelay(writer)
 
         self._decoder.reset()
