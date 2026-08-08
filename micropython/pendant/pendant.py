@@ -129,7 +129,12 @@ def on_message(message):
         state["actual_feed"] = actual
         scheduler.actual_feed = actual
         commanded = scheduler.feed
-        if commanded > FEED_COLLAPSE_FLOOR and actual < commanded * FEED_COLLAPSE_RATIO:
+        # Only while the wheel is actually driving. A stop decays the
+        # commanded feed over about a second while the machine runs out what
+        # is queued, and reporting that as a collapse buried the real ones -
+        # most of a log's worth of dumps were the operator letting go.
+        if (scheduler.moving and commanded > FEED_COLLAPSE_FLOOR
+                and actual < commanded * FEED_COLLAPSE_RATIO):
             state["feed_collapses"] += 1
             # Dump the trace at the moment the machine falls behind what it was
             # asked for, rate-limited so one episode is one dump. This is the

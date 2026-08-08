@@ -133,9 +133,21 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 # match the drain to hold it there. Depth is measured, not assumed.
 PLANNER_TARGET_BLOCKS = 6
 
-# How far above the drain rate to emit while filling. Two means the buffer
-# gains one tick of work per tick, reaching target in about PLANNER_TARGET
-# ticks - fast enough that the fill is over before the operator is up to speed.
+# Ceiling on how far above the drain rate to emit, reached only when the
+# planner is completely empty. Two means the buffer gains a tick of work per
+# tick at worst, which fills it before the operator is up to speed.
+#
+# Applied proportionally to the shortfall, not as a switch. Switching between
+# this and the drain rate on a threshold is bang-bang control: depth chatters
+# across the target and block length doubles and halves tick to tick. The
+# machine showed it as alternating 6.5 mm and 13.5 mm blocks at a constant
+# F8362, and at 0.1 mm as anything from 1.2 mm to 3.4 mm. Blocks of unequal
+# length take unequal time at a fixed feed, so a short one landing on a
+# shallow planner is a stumble - which is precisely the roughness that
+# remained after depth regulation fixed the outright stalls.
+#
+# Scaling by the shortfall makes the correction fade out as the buffer fills,
+# so block length converges instead of oscillating.
 PLANNER_FILL_RATIO = 2.0
 
 # --- turn rate drives feed, not distance ----------------------------------
@@ -643,8 +655,14 @@ class JogScheduler:
                 self.planner_capacity = self.planner_free
             if self.planner_capacity:
                 held = self.planner_capacity - self.planner_free
-                cap = (self.feed * PLANNER_FILL_RATIO
-                       if held < PLANNER_TARGET_BLOCKS else self.feed)
+                shortfall = PLANNER_TARGET_BLOCKS - held
+                if shortfall <= 0:
+                    cap = self.feed
+                else:
+                    if shortfall > PLANNER_TARGET_BLOCKS:
+                        shortfall = PLANNER_TARGET_BLOCKS
+                    cap = self.feed * (1.0 + (PLANNER_FILL_RATIO - 1.0)
+                                       * shortfall / PLANNER_TARGET_BLOCKS)
             else:
                 cap = self._cap_feed if self._building else self.feed
             allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)
@@ -749,6 +767,17 @@ class JogScheduler:
         self._last_dump = self.stats["messages"]
         self.dump_trace("starved {}: queue {:.2f} mm".format(
             self.stumbles, self._queue_mm))
+
+    @property
+    def moving(self):
+        """True while the wheel is turning or its motion is still in flight.
+
+        Read by the collapse detector, which otherwise flags every normal stop:
+        the commanded feed decays over a second or so after the last detent
+        while the machine finishes what is queued, so a reported feed of zero
+        at the end of that is the axis arriving, not a fault.
+        """
+        return self._moving
 
     def dump_trace(self, reason):
         """Print the rolling trace with a reason. Rate-limited by the caller."""
