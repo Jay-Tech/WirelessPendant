@@ -72,9 +72,17 @@ SPI_ID = 0
 PIN_SCK, PIN_MOSI = 18, 19
 PIN_CS, PIN_DC, PIN_RST, PIN_BL = 17, 20, 21, 22
 
-# 90 is landscape on the ILI9341. A portrait panel would use 0 here and
-# the layout follows the reported width and height either way.
-ROTATION = 90
+# Which panel is fitted. "st7796" is the MSP3525/MSP3526 3.5" 320x480 IPS;
+# "ili9341" is the 2.4" 320x240 it replaced, kept because it is the fallback
+# if the new one is ever out of the loop.
+PANEL = "st7796"
+
+# 0 is native portrait on the ST7796S, 320 wide by 480 tall, and is also how
+# the FT6336U reports touch coordinates on this module - so keeping them
+# matched means touch needs no swap or flip. The ILI9341 wanted 90 for
+# landscape. Either way the layout follows the width and height the driver
+# reports.
+ROTATION = 0 if PANEL == "st7796" else 90
 SPI_BAUD = 20_000_000
 DISPLAY_REFRESH_MS = 100
 
@@ -273,16 +281,20 @@ def start_display():
         from machine import SPI
         try:
             from screen import DroScreen
+            from st7796 import ST7796S
             from ili9341 import ILI9341
         except ImportError:
             from pendant.screen import DroScreen
+            from pendant.st7796 import ST7796S
             from pendant.ili9341 import ILI9341
 
         spi = SPI(SPI_ID, baudrate=SPI_BAUD, polarity=0, phase=0,
                   sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI))
         # The panel is built here and handed to the layout, so fitting a
-        # different one is a change to this line rather than to the layout.
-        display = ILI9341(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL, ROTATION)
+        # different one is a change to these two lines rather than to the
+        # layout - which is the whole reason the display is injected.
+        driver = ST7796S if PANEL == "st7796" else ILI9341
+        display = driver(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL, ROTATION)
         panel = DroScreen(display)
         panel.splash("connecting...")
         link.log("display on SPI{} at {} MHz".format(
