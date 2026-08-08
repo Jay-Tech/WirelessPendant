@@ -18,7 +18,8 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND, FEED_BUILD_TRIM,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
-                         RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM)
+                         RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM,
+                         MIN_FEED_BLOCK_MS)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -505,7 +506,24 @@ check("  and a gentle one is proportional, not full speed",
 # One detent in the opening tick carries no speed information beyond the gap it
 # arrived in, so it stays at the floor however long the pause was. That is the
 # deliberate nudge case, and it is why the rate above needs two.
-check("  while a lone click stays at the floor", first_feed(1), FEED_MIN_MM_MIN)
+_, floor_probe = new_scheduler()
+floor_probe.set_step_index(STEP_SIZES.index(0.5))
+check("  while a lone click stays at the floor",
+      first_feed(1), floor_probe.feed_floor())
+
+# The floor is scaled so that click cannot hold the pipeline open. A fixed
+# 50 mm/min is 120 ms of block at 0.1 mm but 600 ms at 0.5 mm, and the machine
+# crawled through it at a reported feed of 50 against 8550 commanded while
+# seventeen blocks piled up behind and the commanded position ran 135 mm ahead.
+worst_block_ms = 0.0
+for index in range(len(STEP_SIZES)):
+    _, probe = new_scheduler()
+    probe.set_step_index(index)
+    block_ms = STEP_SIZES[index] / (probe.feed_floor() / 60.0) * 1000.0
+    if block_ms > worst_block_ms:
+        worst_block_ms = block_ms
+check("  and no step lets one detent hold the pipeline open",
+      worst_block_ms <= MIN_FEED_BLOCK_MS + 1, True)
 
 # A pause mid-turn must still decay the feed - which is why idle ticks enter the
 # window at all. Only a start from rest clears it.

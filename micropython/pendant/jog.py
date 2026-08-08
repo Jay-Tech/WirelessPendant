@@ -237,6 +237,19 @@ FEED_TRACKING_ENABLED = True
 # maximum jog rate, since asking for more than it can deliver rebuilds the queue
 # this design exists to keep shallow.
 FEED_MIN_MM_MIN = 50.0
+
+# Longest a single-detent block may take to execute, in milliseconds.
+#
+# An absolute feed floor cannot serve every step. 50 mm/min was chosen when the
+# step was 0.1 mm, where one detent takes 120 ms. At 0.5 mm the same floor takes
+# 600 ms - thirty ticks - and the machine crawls through it while everything
+# sent behind it queues up. The machine showed exactly that: a reported feed of
+# 50 against a commanded 8550, free falling to 111 as seventeen blocks piled in
+# behind, and the commanded position running 135 mm ahead of the axis.
+#
+# So bound the block instead of the feed. A lone deliberate click still moves
+# precisely, it just does not hold the pipeline open while it does.
+MIN_FEED_BLOCK_MS = 100.0
 FEED_MAX_MM_MIN = 15000.0
 
 # Per-axis maximum, from the machine's own settings ($110/$111/$112). Z is
@@ -528,6 +541,16 @@ class JogScheduler:
         seconds = samples * TICK_MS / 1000.0
         return (total / COUNTS_PER_DETENT) / seconds
 
+    def feed_floor(self):
+        """Lowest feed worth commanding at the current step.
+
+        Scaled so one detent completes within MIN_FEED_BLOCK_MS rather than
+        being a fixed rate, because a fixed rate means a fixed *time* only at
+        one step size.
+        """
+        floor = self.step * 60000.0 / MIN_FEED_BLOCK_MS
+        return floor if floor > FEED_MIN_MM_MIN else FEED_MIN_MM_MIN
+
     def feed_rate(self, detents):
         """Feed in mm/min that matches the current winding speed.
 
@@ -573,8 +596,10 @@ class JogScheduler:
             ceiling = axis_ceiling
         if target > ceiling:
             target = ceiling
-        elif target < FEED_MIN_MM_MIN:
-            target = FEED_MIN_MM_MIN
+        else:
+            floor = self.feed_floor()
+            if target < floor:
+                target = floor
 
         # What the machine drains at the untrimmed rate, kept for the emission
         # cap. The cap must not use the trimmed value: emitting exactly what a
@@ -630,8 +655,9 @@ class JogScheduler:
         # fills - the trim has to reach the commanded feed to do anything.
         if self._building:
             settled *= FEED_BUILD_TRIM
-            if settled < FEED_MIN_MM_MIN:
-                settled = FEED_MIN_MM_MIN
+            floor = self.feed_floor()
+            if settled < floor:
+                settled = floor
         return settled
 
     def tick(self):
@@ -796,12 +822,13 @@ class JogScheduler:
 
         self._record(detents)
 
-        if self._moving or self.feed > FEED_MIN_MM_MIN:
+        floor = self.feed_floor()
+        if self._moving or self.feed > floor:
             # Let the smoothed feed fall while the wheel is still, or the first
             # detent after a pause would inherit the speed of the last burst.
-            self.feed += FEED_DEADBAND * (FEED_MIN_MM_MIN - self.feed)
-            if self.feed < FEED_MIN_MM_MIN:
-                self.feed = FEED_MIN_MM_MIN
+            self.feed += FEED_DEADBAND * (floor - self.feed)
+            if self.feed < floor:
+                self.feed = floor
 
         if self._moving:
             if not self.cancel_on_stop:
