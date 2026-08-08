@@ -103,6 +103,18 @@ AXIS_MAX_FEED = {"X": 15000.0, "Y": 15000.0, "Z": 6000.0, "A": 6000.0}
 # while still following a real change within a few ticks - roughly 50 ms at 0.4.
 FEED_SMOOTHING = 0.25
 
+# Fractional change required before the commanded feed is allowed to move.
+#
+# grblHAL blends consecutive moves that share a feed rate. A feed that drifts
+# every message forces a velocity change between every block - accelerate,
+# decelerate, accelerate - which is felt as jerking once up to speed. Clamping
+# the feed to a constant made it smooth, which is what identified this.
+#
+# Smoothing does not help: it changes how fast the feed moves, not how often, so
+# every message still carries a different number. Holding the feed until it has
+# genuinely changed produces long runs of identical F, which blend.
+FEED_HYSTERESIS = 0.20
+
 # Ceiling per step size, matching STEP_SIZES.
 #
 # The fine values are measured on the machine rather than derived - they came
@@ -145,7 +157,12 @@ STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 # simultaneously negligible at traverse and a large overshoot while creeping.
 # Expressed in ticks it becomes a bounded amount of *time*, about 60 ms of
 # motion, which is what the operator perceives as run-on.
-QUEUE_TICKS = 3.0
+#
+# Five rather than three: at a coarse step near the ceiling, what arrives each
+# tick and what drains are nearly equal, so a tight bound tips in and out of
+# dropping on small variations and the resulting irregular distances are felt as
+# roughness of their own.
+QUEUE_TICKS = 5.0
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
@@ -156,10 +173,10 @@ QUEUE_TICKS = 3.0
 # the feed staircased instead of ramping. Counts plus a slightly longer window
 # bring that to roughly 50 mm/min, which reads as smooth.
 #
-# The window doubles as the ramp: feed rises over its length when you start
-# turning and falls over it when you stop, so a longer window is a gentler ramp
-# as well as a finer measurement.
-RATE_WINDOW_TICKS = 15
+# Eight ticks, 160 ms. Long enough to average out the whole-detent quantisation
+# of a single tick, short enough that winding down lowers the feed promptly -
+# the fault a 300 ms window produced.
+RATE_WINDOW_TICKS = 8
 
 
 class JogScheduler:
@@ -236,25 +253,41 @@ class JogScheduler:
     # --- per tick ---------------------------------------------------------
 
     def turn_rate(self, detents=0):
-        """Detents per second, from the interval since the last movement.
+        """Detents per second.
 
-        Measured as detents divided by the time they took, rather than averaged
-        over a fixed window. A window is wrong in both directions: too slow to
-        rise, so a fast start out-runs the feed and fills the queue, and too
-        slow to fall, so winding down leaves the feed high while detents arrive
-        ever slower - every move then finishes early and waits, which is felt as
-        stutter and jerk as the wheel comes to rest.
+        Averaged over a short window while turning, and taken from the interval
+        since the last movement when starting from rest.
 
-        An interval is accurate at any speed and reacts within a single detent
-        either way. terjeio's MPG firmware gets the same measurement from the
-        PIO, which timestamps every edge.
+        The window exists because a tick sees a small whole number of detents -
+        2, 3 or 4 at a normal wind - so a per-tick reading jitters by a third
+        even from a perfectly steady hand. That jitter passes straight through
+        the feed and into the planner. Averaging removes it; the window is kept
+        short so winding down still lowers the feed promptly, which is what a
+        long window got wrong.
+
+        Starting from rest there is no history to average, so the interval since
+        the last movement is used instead - accurate from the very first detent,
+        which is what keeps the opening of a turn from being throttled.
         """
         if not detents:
             return 0.0
-        seconds = self._ticks_since_motion * TICK_MS / 1000.0
-        if seconds <= 0:
-            seconds = TICK_MS / 1000.0
-        return abs(detents) / seconds
+
+        if not self._moving:
+            ticks = self._ticks_since_motion
+            if ticks < 1:
+                ticks = 1
+            return abs(detents) / (ticks * TICK_MS / 1000.0)
+
+        total = 0
+        for value in self._recent:
+            total += abs(value)
+        # Averaged over the samples actually held, not the nominal window
+        # length. Dividing by the full length while it is still filling reports
+        # a rate lower than the hand is really turning, so the feed dips just
+        # after a strong start.
+        samples = len(self._recent) or 1
+        seconds = samples * TICK_MS / 1000.0
+        return (total / COUNTS_PER_DETENT) / seconds
 
     def feed_rate(self, detents):
         """Feed in mm/min that matches the current winding speed.
@@ -301,6 +334,12 @@ class JogScheduler:
         # jitter during a turn, not to soften its start.
         if not self._moving:
             return target
+
+        # Hold the current feed unless the target has moved outside the band.
+        # Identical consecutive feeds are what let the planner blend.
+        if abs(target - self.feed) < self.feed * FEED_HYSTERESIS:
+            return self.feed
+
         feed = self.feed + FEED_SMOOTHING * (target - self.feed)
         if feed < FEED_MIN_MM_MIN:
             feed = FEED_MIN_MM_MIN

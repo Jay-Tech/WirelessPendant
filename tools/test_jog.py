@@ -14,7 +14,8 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
-                         QUEUE_TICKS, STEP_MAX_FEED, AXIS_MAX_FEED)
+                         QUEUE_TICKS, STEP_MAX_FEED, AXIS_MAX_FEED,
+                         FEED_HYSTERESIS)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -211,6 +212,35 @@ for _ in range(RATE_WINDOW_TICKS):
 enc.move(4)
 decayed = sched.tick()["feed"]
 check("  and it decays away while idle", decayed < FEED_MAX_MM_MIN / 10, True)
+
+print("\nfeed steadiness")
+
+# grblHAL blends consecutive moves that share a feed. A feed drifting every
+# message forces a velocity change between every block, felt as jerking once up
+# to speed - clamping the feed to a constant was smooth on the machine, which is
+# what identified this. Smoothing does not help: it changes how fast the feed
+# moves, not how often. A steady hand must produce a steady F, jitter and all.
+enc, sched = new_scheduler()
+sched.set_step_index(COARSE)                    # headroom below the ceiling, so
+                                                # this tests the feed logic and
+                                                # not the cap
+feeds = []
+wobble = (3, 3, 4, 3, 2, 3, 4, 3, 3, 2, 3, 4)   # a real hand is not metronomic
+for _ in range(4):
+    for detents in wobble:
+        enc.move(4 * detents)
+        message = sched.tick()
+        if message and message["t"] == "jog":
+            feeds.append(message["feed"])
+settled = feeds[len(feeds) // 2:]               # ignore the opening ramp
+check("a steady hand produces a steady feed", len(set(settled)), 1)
+
+# It must still follow a genuine change of speed.
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 9)
+    faster = sched.tick()
+check("  but still follows a real change in speed",
+      faster["feed"] > settled[-1] * (1 + FEED_HYSTERESIS), True)
 
 print("\nrest dither")
 
