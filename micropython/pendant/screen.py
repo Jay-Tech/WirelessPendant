@@ -51,7 +51,11 @@ STATUS_PITCH = 24
 # label reads at three quarters of the digit height rather than half, which
 # matters because the highlighted axis is what you glance at to know what the
 # wheel will move.
-DIGITS_X = 30
+# Two pixels clear of the row border on the right. Nine cells of 32 px is 288,
+# and the panel is 320 with a 2 px border each side, so the fit is exact to
+# within a few pixels: starting at 28 puts the last digit at 316 against a
+# border at 318. Starting at 30 put them flush against it.
+DIGITS_X = 28
 DIGITS = 9
 TOP_MARGIN = 20
 
@@ -190,17 +194,27 @@ class DroScreen:
         self._labels = {}
         self._positions = {}
         for row, axis in enumerate(AXES):
-            y = TOP_MARGIN + row * pitch
-            label = Field(self.display, self._medium, 4, y + 4, 1, color=GREY)
+            # The box comes first and its contents are centred inside it,
+            # rather than the text being placed and a box drawn near it. Done
+            # the other way round the digits sat 4 px below the top edge and
+            # 27 px above the bottom - fine while the row was only a readout,
+            # and obviously wrong the moment it gained a border to sit inside.
+            top = TOP_MARGIN + row * pitch
+            box = (0, top, self.display.width, pitch)
+
+            label = Field(self.display, self._medium, 4,
+                          top + (pitch - self._medium.height) // 2, 1,
+                          color=GREY)
             label.set(axis)
             self._labels[axis] = label
-            self._positions[axis] = Field(self.display, self._big, DIGITS_X, y,
-                                          DIGITS)
+            self._positions[axis] = Field(
+                self.display, self._big, DIGITS_X,
+                top + (pitch - self._big.height) // 2, DIGITS)
+
             # The whole row is the target, not just the label. It is already
             # the thing that highlights to show what the wheel will move, so
             # tapping it to choose is the same gesture read backwards - and a
             # full-width row is the largest target the panel can offer.
-            box = (0, y - 4, self.display.width, pitch)
             self._axis_boxes[axis] = box
             self.zones.add("axis", box[0], box[1], box[2], box[3], axis)
             if self._zones_shown:

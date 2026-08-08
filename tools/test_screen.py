@@ -99,8 +99,15 @@ check("the link line stays anchored to the bottom", screen._link.y, 218)
 check("  with the state line one pitch above", screen._state.y,
       218 - STATUS_PITCH)
 check("  and the feed sharing the state row", screen._mode.y, screen._state.y)
-check("position rows unchanged",
-      [screen._positions[a].y for a in AXES], [20, 66, 112])
+# Digits are centred in their row box, not pinned to its top. They used to sit
+# 4 px below the top edge and 27 px above the bottom, which read as fine while
+# the row was only a readout and read as broken the moment it gained a border.
+for _index, _axis in enumerate(AXES):
+    _top = 20 + _index * ROW_PITCH
+    _above = screen._positions[_axis].y - _top
+    _below = _top + ROW_PITCH - (screen._positions[_axis].y + 32)
+    check("  {} digits are centred in their row".format(_axis),
+          abs(_above - _below) <= 1, True)
 
 right, bottom = extent(display)
 check("nothing is drawn past the right edge", right <= 320, True)
@@ -217,12 +224,22 @@ check("  and the border matches the row's touch target",
       ("axis", "Y"))
 
 # A border overlapping the digits it surrounds would clip a column silently,
-# the driver clamping rather than complaining.
+# the driver clamping rather than complaining. Vertically the digits must be
+# centred, and horizontally they must clear the right edge - nine 32 px cells
+# is 288 of 320, so the fit is exact to within a few pixels.
 for axis in AXES:
     bx, by, bw, bh = tall_screen._axis_boxes[axis]
     digits = tall_screen._positions[axis]
-    check("  the {} border clears its own digits".format(axis),
-          by + 2 <= digits.y and digits.y + 32 <= by + bh - 2, True)
+    above = digits.y - by
+    below = by + bh - (digits.y + 32)
+    check("  the {} digits are centred in their border".format(axis),
+          abs(above - below) <= 1, True)
+    check("    with the border clear of them", above >= 2 and below >= 2, True)
+    check("    and clear of the right edge",
+          digits.x + digits.length * 32 <= bx + bw - 2, True)
+    label = tall_screen._labels[axis]
+    check("    the label centred too",
+          abs((label.y - by) - (by + bh - (label.y + 24))) <= 1, True)
 
 print("\nzone arithmetic")
 
