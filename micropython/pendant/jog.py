@@ -309,6 +309,19 @@ TRACE_TICKS = 24            # how much history to keep either side
 # Minimum gap between dumps, so one stall produces one dump rather than a
 # screenful. In ticks, but sized in time - at 100 it was five seconds at a
 # 50 ms tick and became two when the tick shortened.
+# Full table dumps allowed per session. After this the reason still prints as
+# one line and the counters keep counting, but the twenty-four rows stop.
+#
+# Printing is not free on this board: every line goes out over USB CDC, and if
+# the host is not draining as fast as the pendant writes, print() blocks - and
+# blocks the whole asyncio loop with it, including the socket read and the jog
+# scheduler. A run with seventy collapses stalled the loop for a full second,
+# which is the diagnostic causing the fault it exists to describe.
+#
+# Six is enough to see a pattern. The sixtieth dump has never said anything the
+# sixth did not.
+TRACE_DUMP_BUDGET = 6
+
 TRACE_QUIET_MS = 5000
 TRACE_QUIET_TICKS = max(1, TRACE_QUIET_MS // TICK_MS)
 TRACE_STUMBLE_RATIO = 0.4   # a tick carrying less than this share of the recent
@@ -343,6 +356,7 @@ class JogScheduler:
         self.actual_feed = 0          # what the controller reports, pushed in
         self.planner_free = 0         # controller's free planner slots, ditto
         self.planner_capacity = 0     # largest free count seen = empty planner
+        self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
@@ -823,12 +837,25 @@ class JogScheduler:
         return self._ticks_since_motion < MOVING_GRACE_TICKS
 
     def dump_trace(self, reason):
-        """Print the rolling trace with a reason. Rate-limited by the caller."""
+        """Print the rolling trace with a reason. Rate-limited by the caller.
+
+        Degrades to a single line once the budget is spent, rather than
+        stopping: knowing an event still happens matters, and the table is what
+        costs the time.
+        """
+        self.dumps += 1
+        if self.dumps > TRACE_DUMP_BUDGET:
+            print("[trace] {} (table suppressed, {} dumps)".format(
+                reason, self.dumps))
+            return
+
         print("[trace] {}".format(reason))
         print("  cmdF  actF  det   mm  queue  free")
         for feed, actual, det, mm, queue, free in self.trace:
             print("  {:>5} {:>5} {:>4} {:>5.2f} {:>5.1f} {:>5}".format(
                 feed, actual, det, mm, queue, free))
+        if self.dumps == TRACE_DUMP_BUDGET:
+            print("  (dump budget spent - further traces print one line)")
 
     async def run(self, link):
         """Drive the scheduler forever, handing messages to the link."""

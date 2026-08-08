@@ -116,7 +116,12 @@ FEED_COLLAPSE_RATIO = 0.5
 FEED_COLLAPSE_FLOOR = 500
 
 # One dump per episode, not per status frame.
-COLLAPSE_DUMP_QUIET_MS = 3000
+# Raised from 3 s. At three seconds a bad minute produced twenty dumps of
+# twenty-six lines each, and the printing blocked the event loop for a full
+# second. The budget in jog.py bounds the total; this bounds the rate, so the
+# first few dumps are spread across the run rather than spent in the first ten
+# seconds of it.
+COLLAPSE_DUMP_QUIET_MS = 10000
 
 STATUS_REPORT_S = 15
 
@@ -152,14 +157,6 @@ def on_message(message):
     # place it matters. A buffer that never fills means the lookahead the
     # scheduler assumes it is building does not exist.
     free = message.get("bf")
-    if not free and scheduler is not None and not state["bf_warned"]:
-        # Said once, because without it the pendant silently runs its degraded
-        # path: emission pinned at the drain rate, the planner one or two blocks
-        # deep, and motion that ripples for a reason nothing on screen explains.
-        state["bf_warned"] = True
-        log("controller is not reporting Bf: - planner depth is unknown, so")
-        log("  motion will be rougher. Enable the buffer-state bit in $10")
-        log("  (add 2 to its value) and restart the sender.")
     if free is not None and scheduler is not None:
         state["planner_free"] = free
         scheduler.planner_free = free
@@ -168,6 +165,21 @@ def on_message(message):
                 state["planner_min"] = free
             if free > state["planner_max"]:
                 state["planner_max"] = free
+
+        # Said once, when enough frames have arrived to be sure. Judged on
+        # never having seen a non-zero count rather than on this frame being
+        # zero, because zero is also what a momentarily full planner reports -
+        # and warning on that would be both wrong and alarming.
+        #
+        # It matters because without Bf: the pendant silently runs its degraded
+        # path: emission pinned at the drain rate, the planner a block or two
+        # deep, and motion that ripples for a reason nothing on screen explains.
+        if (not state["bf_warned"] and state["status_frames"] > 20
+                and scheduler.planner_capacity == 0):
+            state["bf_warned"] = True
+            link.log("controller is not reporting Bf: - planner depth is")
+            link.log("  unknown, so motion will be rougher. Enable the")
+            link.log("  buffer-state bit in $10 (add 2) and restart.")
 
     actual = message.get("fr")
     if actual is not None and scheduler is not None:
