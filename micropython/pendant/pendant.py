@@ -82,7 +82,8 @@ pendant_link = None
 screen = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
-         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None}
+         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
+         "lag_enabled": True}
 
 
 def on_message(message):
@@ -93,14 +94,30 @@ def on_message(message):
     state["dro"] = wpos
     state["machine_state"] = message.get("state", "?")
 
-    # True lag: what has been commanded, less what the machine reports moving.
-    # The scheduler's queue is an open-loop model and cannot see the
-    # controller's planner or the sender's buffer, so a backlog accumulating
-    # there is invisible to it. This is measured rather than estimated, and it
-    # is the number that says whether the machine is falling behind.
-    if wpos is None or scheduler is None:
+    # Everything below here is diagnostic. It runs inside the receive loop, so
+    # anything it raises would kill the session and present as a link that will
+    # not stay up - a measurement taking down the thing it measures. Nothing
+    # here is worth losing the pendant over.
+    try:
+        update_lag(wpos)
+    except Exception as exc:
+        link.log("lag measurement failed, disabling it: {}: {}".format(
+            type(exc).__name__, exc))
+        state["lag_enabled"] = False
+
+
+def update_lag(wpos):
+    """Commanded distance less what the machine reports moving.
+
+    The scheduler's queue is an open-loop model and cannot see the controller's
+    planner or the sender's buffer, so a backlog accumulating in either is
+    invisible to it. This is measured rather than estimated.
+    """
+    if not state["lag_enabled"] or wpos is None or scheduler is None:
         return
-    index = AXIS_ORDER.index(scheduler.axis) if scheduler.axis in AXIS_ORDER else 0
+    if scheduler.axis not in AXIS_ORDER:
+        return
+    index = AXIS_ORDER.index(scheduler.axis)
     if index >= len(wpos):
         return
 
@@ -110,9 +127,7 @@ def on_message(message):
         return
 
     _, start_pos, start_cmd = reference
-    moved = wpos[index] - start_pos
-    commanded = scheduler.commanded_mm - start_cmd
-    lag = abs(commanded - moved)
+    lag = abs((scheduler.commanded_mm - start_cmd) - (wpos[index] - start_pos))
     state["lag_mm"] = lag
     if lag > state["peak_lag_mm"]:
         state["peak_lag_mm"] = lag
