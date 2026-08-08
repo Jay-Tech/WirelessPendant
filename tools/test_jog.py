@@ -14,7 +14,7 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
-                         MAX_QUEUE_MM, STEP_MAX_FEED)
+                         QUEUE_TICKS, STEP_MAX_FEED, AXIS_MAX_FEED)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -24,8 +24,13 @@ FINE = STEP_SIZES.index(0.01)
 failures = []
 
 
-def check(label, got, want):
-    ok = got == want
+def check(label, got, want, tol=None):
+    # Feed converges asymptotically under smoothing, so exact equality would
+    # only ever pass by accident of iteration count.
+    if tol is not None and isinstance(got, float) and isinstance(want, float):
+        ok = abs(got - want) <= tol
+    else:
+        ok = got == want
     print("  {:<52} {}".format(label, "PASS" if ok else "FAIL"))
     if not ok:
         print("      got  {!r}\n      want {!r}".format(got, want))
@@ -118,7 +123,7 @@ print("\nfeed tracking")
 # Rates chosen to stay inside what the step's feed ceiling can execute. Past
 # that the queue bound deliberately drops, which the drop test below covers.
 per_detent = []
-for rate in (1, 3, 6):
+for rate in (1, 2, 3):
     enc, sched = new_scheduler()
     for _ in range(RATE_WINDOW_TICKS * 2):
         enc.move(4 * rate)
@@ -134,7 +139,7 @@ sched.set_step_index(COARSE)             # 1.0 mm per detent
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4)                          # 1 detent per 20 ms = 50 detents/s
     tracked = sched.tick()
-check("feed meets the commanded rate", tracked["feed"], 50 * 1.0 * 60)
+check("feed meets the commanded rate", tracked["feed"], 50 * 1.0 * 60, tol=1.0)
 
 # Feed must not exceed the commanded rate. Over-feeding makes each move finish
 # early and stop, so the planner accelerates and decelerates once per detent -
@@ -143,7 +148,7 @@ enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 3)                      # 150 detents/s at 0.1 mm
     fine = sched.tick()
-check("feed never exceeds the commanded rate", fine["feed"], 150 * 0.1 * 60)
+check("feed never exceeds the commanded rate", fine["feed"], 150 * 0.1 * 60, tol=1.0)
 
 # Which means a move lasts about a full tick, so consecutive jogs join up
 # instead of each one starting and stopping.
@@ -159,20 +164,31 @@ for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 1 mm
     capped = sched.tick()
 check("feed is capped at the step's ceiling",
-      capped["feed"], STEP_MAX_FEED[COARSE])
+      capped["feed"], min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"]), tol=5.0)
+
+# Z is far slower than X and Y here, so the ceiling has to follow the axis.
+enc, sched = new_scheduler(axis="Z")
+sched.set_step_index(COARSE)
+for _ in range(RATE_WINDOW_TICKS * 3):
+    enc.move(4 * 6)
+    z_capped = sched.tick()
+check("Z is capped at its own lower ceiling",
+      z_capped["feed"], AXIS_MAX_FEED["Z"], tol=5.0)
 
 # Out-turning the machine must drop the surplus, not bank it. Banking is what
 # made run-on grow the longer the pendant was used: every back-and-forth added
 # more than the machine drained, and none of it paused long enough to cancel.
+bound = (sched.feed / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
 check("in-flight distance is bounded, so run-on cannot grow",
-      sched._queue_mm <= MAX_QUEUE_MM + 1e-9, True)
+      sched._queue_mm <= bound + 1e-9, True)
 check("  and the dropped detents are counted",
       sched.stats["dropped_detents"] > 0, True)
 
 # Within what the machine can follow, nothing is dropped at all.
+# 3 detents/tick at 0.1 mm asks for 900 mm/min, just inside the 950 ceiling.
 enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
-    enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
+    enc.move(4 * 3)
     sched.tick()
 check("nothing is dropped while the machine can keep up",
       sched.stats["dropped_detents"], 0)
@@ -188,7 +204,7 @@ enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
     spinning = sched.tick()
-check("fast turning raises the feed", spinning["feed"], 300 * 0.1 * 60)
+check("fast turning raises the feed", spinning["feed"], STEP_MAX_FEED[2], tol=5.0)
 
 for _ in range(RATE_WINDOW_TICKS):
     sched.tick()                         # idle; the window fills with zeros

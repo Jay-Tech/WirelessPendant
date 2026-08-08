@@ -87,7 +87,13 @@ FEED_TRACKING_ENABLED = True
 # maximum jog rate, since asking for more than it can deliver rebuilds the queue
 # this design exists to keep shallow.
 FEED_MIN_MM_MIN = 50.0
-FEED_MAX_MM_MIN = 5000.0
+FEED_MAX_MM_MIN = 15000.0
+
+# Per-axis maximum, from the machine's own settings ($110/$111/$112). Z is
+# usually much slower than X and Y, and commanding a feed an axis cannot reach
+# only runs it at full acceleration, so the ceiling has to follow the axis
+# rather than be one number for the machine.
+AXIS_MAX_FEED = {"X": 15000.0, "Y": 15000.0, "Z": 6000.0, "A": 6000.0}
 
 # Smoothing applied to the feed, as an exponential moving average.
 #
@@ -99,10 +105,16 @@ FEED_SMOOTHING = 0.25
 
 # Ceiling per step size, matching STEP_SIZES.
 #
-# A fine step is for placing the tool, not covering ground, so letting it reach
-# the machine's full rate just makes it twitchy to control. Each step gets a
-# ceiling suited to what it is for; the coarse step keeps the full range.
-STEP_MAX_FEED = (150.0, 300.0, 950.0, 4000.0, 5000.0)
+# The fine values are measured on the machine rather than derived - they came
+# out roughly a third of what seemed reasonable on paper, which says a fine step
+# wants control far more than speed.
+#
+# The coarse ones are the opposite problem. They were limited by a 5000 mm/min
+# ceiling guessed before the machine's real limits were known; X and Y actually
+# do 15000. Sized so a natural wind lands near the rate this machine is normally
+# jogged at - around 9000 mm/min, which 1 mm reaches at 150 detents/s - with
+# headroom above rather than running to the absolute maximum.
+STEP_MAX_FEED = (150.0, 300.0, 950.0, 8000.0, 12000.0)
 
 # Millimetres of motion allowed to be in flight at once.
 #
@@ -120,7 +132,15 @@ STEP_MAX_FEED = (150.0, 300.0, 950.0, 4000.0, 5000.0)
 # follow cannot be honoured - the choice is only between lagging and dropping,
 # and a pendant that saves motion to replay after you stop is far worse than one
 # that simply stops keeping up.
-MAX_QUEUE_MM = 3.0
+# In-flight motion is bounded to this many ticks' worth of travel at the
+# current feed, rather than to a fixed distance.
+#
+# A constant is wrong because what it means changes with speed. At 1500 mm/s^2,
+# stopping from F15000 takes 20.8 mm and from F1000 takes 0.09 mm - so 3 mm was
+# simultaneously negligible at traverse and a large overshoot while creeping.
+# Expressed in ticks it becomes a bounded amount of *time*, about 60 ms of
+# motion, which is what the operator perceives as run-on.
+QUEUE_TICKS = 3.0
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
@@ -168,7 +188,7 @@ class JogScheduler:
         self._recent = []          # raw counts per tick, most recent last
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self._queue_mm = 0.0          # estimate of motion in flight
-        self._ticks_since_motion = 1  # interval used to measure turn rate
+        self._ticks_since_motion = 0  # interval used to measure turn rate
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
                       "dropped_detents": 0}
 
@@ -260,12 +280,22 @@ class JogScheduler:
         # curve above it.
         target = self.turn_rate(detents) * self.step * 60.0
         ceiling = STEP_MAX_FEED[self.step_index]
+        axis_ceiling = AXIS_MAX_FEED.get(self.axis, FEED_MAX_MM_MIN)
+        if axis_ceiling < ceiling:
+            ceiling = axis_ceiling
         if target > ceiling:
             target = ceiling
         elif target < FEED_MIN_MM_MIN:
             target = FEED_MIN_MM_MIN
 
-        # Smooth towards the target rather than jumping to it.
+        # Smooth towards the target rather than jumping to it - but only while
+        # already moving. Starting from rest, smoothing would ramp up from the
+        # floor over several ticks, and since the queue bound derives from the
+        # feed it would also under-estimate capacity and drop detents at exactly
+        # the moment the operator starts turning. Smoothing exists to damp
+        # jitter during a turn, not to soften its start.
+        if not self._moving:
+            return target
         feed = self.feed + FEED_SMOOTHING * (target - self.feed)
         if feed < FEED_MIN_MM_MIN:
             feed = FEED_MIN_MM_MIN
@@ -312,15 +342,20 @@ class JogScheduler:
 
         if detents:
             self._idle_ticks = 0
-            self._moving = True
 
-            # Distance stays exactly one step per detent. Only the feed moves.
+            # Feed is computed before _moving is set, because feed_rate reads
+            # it to tell a fresh start from a continuing turn. Setting it first
+            # made every start look like a continuation, so the feed smoothed up
+            # from the floor - and since the queue bound derives from the feed,
+            # that also discarded most of the opening detents.
             self.feed = self.feed_rate(detents)
+            self._moving = True
 
             # Refuse to put more in flight than MAX_QUEUE_MM. The surplus is
             # dropped rather than carried in the residual, which would only
             # defer the same overshoot to the next tick.
-            room = MAX_QUEUE_MM - self._queue_mm
+            max_queue = (self.feed / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
+            room = max_queue - self._queue_mm
             allowed = int(room / self.step)
             if allowed < 1:
                 # Always let one detent through, or a full queue would stop
