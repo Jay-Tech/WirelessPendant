@@ -294,6 +294,7 @@ class JogScheduler:
         self._queue_mm = 0.0          # estimate of motion in flight
         self._ticks_since_motion = 0  # interval used to measure turn rate
         self._building = True         # buffer still filling
+        self._direction = 0           # sign of motion currently in flight
         self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
@@ -305,7 +306,7 @@ class JogScheduler:
         self.stumbles = 0
         self._last_dump = -TRACE_QUIET_TICKS
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
-                      "dropped_detents": 0}
+                      "dropped_detents": 0, "reversals": 0}
 
         # Signed distance commanded, for comparison against what the
         # machine reports actually moving. The scheduler's own queue is
@@ -521,6 +522,21 @@ class JogScheduler:
             self._recent.pop(0)
 
         if detents:
+            # A reversal has to flush what is queued. The buffer that keeps the
+            # planner supplied is motion in the old direction, so without this
+            # the machine travels the whole of it the wrong way before it starts
+            # coming back - and the deeper the buffer, the worse the reversal.
+            # It is why buffering helped a steady wind and not a back-and-forth.
+            direction = 1 if detents > 0 else -1
+            if self._direction and direction != self._direction and self._queue_mm > 0:
+                self._direction = 0
+                self._queue_mm = 0.0
+                self._residual = 0
+                self._building = True
+                self.stats["reversals"] += 1
+                return protocol.jog_cancel()
+            self._direction = direction
+
             self._idle_ticks = 0
 
             # Feed is computed before _moving is set, because feed_rate reads
@@ -594,6 +610,7 @@ class JogScheduler:
             if self._idle_ticks >= IDLE_TICKS_BEFORE_CANCEL:
                 self._moving = False
                 self._idle_ticks = 0
+                self._direction = 0
                 self.stats["cancels"] += 1
                 return protocol.jog_cancel()
 
