@@ -60,7 +60,27 @@ except ImportError:
 #
 # The latency cost is nil in practice: the sender dispatches its own jogs every
 # 75 ms, so this was never the limiting quantiser.
-TICK_MS = 50
+# Back to 20 ms. It was raised to 50 to cut the number of blocks reaching the
+# controller, on the theory that grblHAL was being flooded. That theory was
+# wrong - the stalls were the sender posting every jog to its UI thread, where
+# they queued behind rendering and console trimming - and with that fixed the
+# constraint reverses.
+#
+# What the planner needs to hold a commanded feed is a number of blocks, not a
+# distance. At F9000 a 7.5 mm block reaches only sqrt(1500 x 7.5) = 106 mm/s on
+# its own, so at least two must chain to reach 150 mm/s. Holding one to four,
+# which is what a 50 ms tick produced, puts the machine right on that threshold:
+# the reported feed then walked 5400, 6300, 7200, 8100, 9000 - precisely
+# sqrt(1500 x d) for the distance chained at each moment - and that continuous
+# re-deciding is felt as steady roughness rather than jerk.
+#
+# A shorter tick fixes it without costing run-off, which is the point. Run-off
+# is the distance queued; chaining depends on the count. At 20 ms the same 20 mm
+# of lead is seven blocks instead of three.
+#
+# The sender's dispatch interval must come down with it, or messages arriving
+# faster than it dispatches are merged back into the long blocks this avoids.
+TICK_MS = 20
 
 # Quadrature edges per detent, matching the decoder.
 COUNTS_PER_DETENT = 4
@@ -347,10 +367,15 @@ BUFFER_HYSTERESIS = 0.35
 # Eight ticks, 160 ms. Long enough to average out the whole-detent quantisation
 # of a single tick, short enough that winding down lowers the feed promptly -
 # the fault a 300 ms window produced.
-RATE_WINDOW_TICKS = 8
+# Held at about 400 ms of history. Expressed in ticks but sized in time: a
+# fixed count silently shortens the averaging window when the tick rate rises,
+# and a shorter window means a noisier rate estimate feeding straight into the
+# commanded feed.
+RATE_WINDOW_TICKS = max(4, 400 // TICK_MS)
 
 # Per-tick trace, for catching a stall in the act.
 TRACE_TICKS = 24            # how much history to keep either side
+                            # (ticks, not time - this is a display width)
 TRACE_QUIET_TICKS = 100     # minimum gap between dumps, so one stall is one dump
 TRACE_STUMBLE_RATIO = 0.4   # a tick carrying less than this share of the recent
                             # average, while still turning, is a stumble
@@ -736,7 +761,15 @@ class JogScheduler:
                 cap = self.feed
             else:
                 cap = self._cap_feed if self._building else self.feed
-            allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)
+            # Rounded, not truncated. Truncating biases every tick downwards,
+            # and the bias is what the planner feels: emitting less than the
+            # drain is exactly how depth is lost. It also lands on values that
+            # should be exact - 900/60 x 0.020 / 0.1 evaluates to
+            # 2.9999999999999996, so asking for three detents allowed two.
+            #
+            # Harmless at a 50 ms tick where a detent is a few percent of the
+            # message; at 20 ms the same detent is a third of it.
+            allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step + 0.5)
             if allowed < 1:
                 allowed = 1
 

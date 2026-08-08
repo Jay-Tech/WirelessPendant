@@ -466,14 +466,25 @@ check("  and motion while disabled is discarded, not replayed",
 print("\nstarting from rest")
 
 
-def first_feed(detents, step=0.5, idle=40):
+def per_tick(detents_per_second):
+    """Detents landing in one tick at a given turn rate.
+
+    Rates are stated per second, not per tick, so they keep their meaning when
+    the tick rate changes. Stated per tick, a "gentle" six became 300 detents/s
+    when the tick shortened to 20 ms - fast enough to pin the feed ceiling, so
+    gentle and hard turned into the same test.
+    """
+    return max(1, int(detents_per_second * TICK_MS / 1000.0 + 0.5))
+
+
+def first_feed(detents_per_second, step=0.5, idle=40):
     """Feed commanded by the opening tick of a burst after a pause."""
     enc, sched = new_scheduler()
     for _ in range(STEP_SIZES.index(step) - STEP_SIZES.index(0.1)):
         sched.step_up()
     for _ in range(idle):
         sched.tick()
-    enc.move(4 * detents)
+    enc.move(4 * per_tick(detents_per_second))
     message = sched.tick()
     return message["feed"] if message else 0
 
@@ -483,14 +494,17 @@ def first_feed(detents, step=0.5, idle=40):
 # reports a fraction of the real turn rate, so a burst opens at the floor and
 # climbs for nine ticks. On the machine that is having to spin the wheel a while
 # before anything happens.
-fast = first_feed(14)
+fast = first_feed(280)          # a hard wind
 check("a hard start reaches speed on the first tick", fast > 8000, True)
 check("  and a gentle one is proportional, not full speed",
-      FEED_MIN_MM_MIN < first_feed(6) < fast, True)
+      FEED_MIN_MM_MIN < first_feed(100) < fast, True)
 
 # The other half of the same trade. A single click is a deliberate nudge for
 # fine positioning and the idle gap is the only evidence of its speed, so it
 # has to stay slow or fine work turns twitchy.
+# One detent in the opening tick carries no speed information beyond the gap it
+# arrived in, so it stays at the floor however long the pause was. That is the
+# deliberate nudge case, and it is why the rate above needs two.
 check("  while a lone click stays at the floor", first_feed(1), FEED_MIN_MM_MIN)
 
 # A pause mid-turn must still decay the feed - which is why idle ticks enter the
