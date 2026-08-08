@@ -14,7 +14,7 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
-                         MAX_QUEUE_MM, RATE_FOR_FULL_FEED)
+                         MAX_QUEUE_MM)
 
 failures = []
 
@@ -129,15 +129,20 @@ for _ in range(RATE_WINDOW_TICKS * 2):
     tracked = sched.tick()
 check("feed meets the commanded rate", tracked["feed"], 50 * 1.0 * 60)
 
-# A fine step can reach full feed at a turn rate a hand can actually produce.
-# Matching the commanded rate alone would need 833 detents/s at 0.1 mm; feeding
-# faster than commanded is free, because the move just finishes early.
+# Feed must not exceed the commanded rate. Over-feeding makes each move finish
+# early and stop, so the planner accelerates and decelerates once per detent -
+# which is what made fine steps violent on the machine.
 enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 3)                      # 150 detents/s at 0.1 mm
     fine = sched.tick()
-check("fine step reaches full feed at a reachable rate",
-      fine["feed"], FEED_MAX_MM_MIN)
+check("feed never exceeds the commanded rate", fine["feed"], 150 * 0.1 * 60)
+
+# Which means a move lasts about a full tick, so consecutive jogs join up
+# instead of each one starting and stopping.
+move_ms = (abs(fine["det"]) * fine["step"] / (fine["feed"] / 60.0)) * 1000
+check("  so each move spans roughly a whole tick",
+      abs(move_ms - TICK_MS) < TICK_MS * 0.5, True)
 
 # Capped, because asking for more than the machine can deliver only rebuilds
 # the queue this design exists to keep shallow.
@@ -175,7 +180,7 @@ enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
     spinning = sched.tick()
-check("fast turning raises the feed", spinning["feed"], FEED_MAX_MM_MIN)
+check("fast turning raises the feed", spinning["feed"], 300 * 0.1 * 60)
 
 for _ in range(RATE_WINDOW_TICKS):
     sched.tick()                         # idle; the window fills with zeros

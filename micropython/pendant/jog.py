@@ -76,22 +76,13 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 # feeding at exactly that makes the machine track the hand.
 FEED_TRACKING_ENABLED = True
 
-# Floor, so a slow careful turn still moves at a usable rate rather than
-# crawling, and ceiling, which should sit at or below the machine's own maximum
-# jog rate - asking for more than it can deliver just rebuilds the queue this
-# is meant to avoid.
-FEED_MIN_MM_MIN = 100.0
+# Floor and ceiling. The floor is deliberately low: it exists only so a feed of
+# zero is never commanded, and raising it re-creates the over-feeding that makes
+# short moves violent. The ceiling should sit at or below the machine's own
+# maximum jog rate, since asking for more than it can deliver rebuilds the queue
+# this design exists to keep shallow.
+FEED_MIN_MM_MIN = 50.0
 FEED_MAX_MM_MIN = 5000.0
-
-# Turn rate, in detents/s, that asks for the full feed rate.
-#
-# Feed is the higher of two things: the rate actually being commanded
-# (rate x step x 60, which must be met or the queue grows), and a curve from
-# this constant. Feeding faster than commanded costs nothing - each move simply
-# finishes early and the queue stays empty - so the curve lets a fine step reach
-# a usable feed without needing an impossible turn rate. At 0.1 mm, matching the
-# commanded rate alone would need 833 detents/s to reach 5000 mm/min.
-RATE_FOR_FULL_FEED = 150.0
 
 # Millimetres of motion allowed to be in flight at once.
 #
@@ -210,7 +201,21 @@ class JogScheduler:
         for value in self._recent:
             total += abs(value)
         seconds = RATE_WINDOW_TICKS * TICK_MS / 1000.0
-        return (total / COUNTS_PER_DETENT) / seconds
+        windowed = (total / COUNTS_PER_DETENT) / seconds
+
+        # Take whichever is higher: the window, or this tick alone. The window
+        # is too slow to start. Beginning a fast wind, it ramps over its own
+        # length while the operator is already turning hard, so the feed lags,
+        # the queue fills and detents get dropped before it catches up.
+        #
+        # Reading this tick alone gives the rate immediately, and letting the
+        # window win on the way down keeps the decay smooth rather than
+        # collapsing the feed between detents. Fast attack, slow release.
+        if self._recent:
+            instant = (abs(self._recent[-1]) / COUNTS_PER_DETENT) / (TICK_MS / 1000.0)
+            if instant > windowed:
+                return instant
+        return windowed
 
     def feed_rate(self):
         """Feed in mm/min that matches the current winding speed.
@@ -224,17 +229,22 @@ class JogScheduler:
         if not self.feed_tracking:
             return FEED_MAX_MM_MIN
 
-        rate = self.turn_rate()
-
-        # Must be met, or the queue grows by the shortfall every tick.
-        commanded = rate * self.step * 60.0
-
-        # May be exceeded freely: a move that finishes early leaves the queue
-        # empty, which is exactly the state we want.
-        span = FEED_MAX_MM_MIN - FEED_MIN_MM_MIN
-        curve = FEED_MIN_MM_MIN + span * min(1.0, rate / RATE_FOR_FULL_FEED)
-
-        feed = commanded if commanded > curve else curve
+        # Exactly the rate being commanded - no more.
+        #
+        # Feeding faster than commanded is not free, which an earlier version
+        # got wrong. Distance per detent is fixed, so a higher feed does not
+        # cover more ground; it makes each move finish early and then wait. At
+        # 0.1 mm and 5000 mm/min a move lasts 1.2 ms of a 20 ms tick, so the
+        # planner accelerates hard and decelerates to a stop for every detent -
+        # felt on the machine as rough, violent motion at fine steps while the
+        # coarse step, where feed happened to be near the commanded rate, was
+        # smooth.
+        #
+        # Matching the commanded rate makes each move exactly fill its tick, so
+        # consecutive jogs blend into continuous motion. terjeio's MPG firmware
+        # does the same thing - feed straight from encoder velocity, with no
+        # curve above it.
+        feed = self.turn_rate() * self.step * 60.0
         if feed < FEED_MIN_MM_MIN:
             return FEED_MIN_MM_MIN
         if feed > FEED_MAX_MM_MIN:
