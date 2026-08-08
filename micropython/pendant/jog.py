@@ -180,29 +180,6 @@ STEP_MAX_FEED = (150.0, 250.0, 2500.0, 9000.0, 12000.0)
 # follow cannot be honoured - the choice is only between lagging and dropping,
 # and a pendant that saves motion to replay after you stop is far worse than one
 # that simply stops keeping up.
-# In-flight motion is bounded to this many milliseconds of travel at the current
-# feed, rather than to a fixed distance or a number of ticks.
-#
-# Milliseconds, not ticks, because this is directly how far the machine coasts
-# after the wheel stops - and expressing it in ticks tied it to TICK_MS. Raising
-# the tick from 20 ms to 100 ms silently multiplied the run-on fivefold, to half
-# a second of travel: 100 mm at F12000, which is what "too much run off" was.
-#
-# It is also the planner's buffer, so it cannot go too small either. Below about
-# a tick and a half there is nothing left to absorb arrival jitter and the
-# planner starves. This is the knob that trades run-on against smoothness.
-#
-# A constant is wrong because what it means changes with speed. At 1500 mm/s^2,
-# stopping from F15000 takes 20.8 mm and from F1000 takes 0.09 mm - so 3 mm was
-# simultaneously negligible at traverse and a large overshoot while creeping.
-# Expressed in ticks it becomes a bounded amount of *time*, about 60 ms of
-# motion, which is what the operator perceives as run-on.
-#
-# Five rather than three: at a coarse step near the ceiling, what arrives each
-# tick and what drains are nearly equal, so a tight bound tips in and out of
-# dropping on small variations and the resulting irregular distances are felt as
-# roughness of their own.
-QUEUE_MS = 300.0
 
 # Feed applied while a burst of motion establishes its buffer, and how long for.
 #
@@ -236,8 +213,22 @@ FEED_BUILD_TRIM = 0.95
 #
 # 1.5 ticks covers a dip of one full tick. It is also, directly, the run-on when
 # the wheel stops - buffer and coasting are the same quantity, so this is the
-# knob that trades one against the other.
+# knob that trades one against the other, and it is the only bound on in-flight
+# motion now that the regulator holds the depth.
 BUFFER_TICKS = 1.5
+
+# Hysteresis on the refill decision, as a fraction of the target either side.
+#
+# Without it the buffer crosses its target every tick - refill pushes it above,
+# the next drain takes it below - so the trim toggles every tick and the feed
+# alternates on every message. The wire showed exactly that: F2375, F2256.2,
+# F2375, F2256.2, forever, which is 0.95 apart. grblHAL blends consecutive moves
+# that share a feed, so alternating on every block means it can blend none of
+# them and adjusts velocity between all of them.
+#
+# Refilling starts well below the target and stops well above, so the feed holds
+# still through long runs and moves only when the buffer has genuinely drifted.
+BUFFER_HYSTERESIS = 0.35
 
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
@@ -457,7 +448,12 @@ class JogScheduler:
         # at its trough, which is the number that decides whether the planner
         # runs dry.
         wanted = (target / 60.0) * (TICK_MS / 1000.0) * BUFFER_TICKS
-        self._building = self._queue_mm < wanted
+        if self._building:
+            # Keep refilling until comfortably above target, not merely at it.
+            if self._queue_mm > wanted * (1.0 + BUFFER_HYSTERESIS):
+                self._building = False
+        elif self._queue_mm < wanted * (1.0 - BUFFER_HYSTERESIS):
+            self._building = True
 
         # Smooth towards the target rather than jumping to it - but only while
         # already moving. Starting from rest, smoothing would ramp up from the
@@ -564,6 +560,12 @@ class JogScheduler:
             # While building, emit at the untrimmed rate so the queue gains the
             # difference. Once at depth, emit exactly what the commanded feed
             # drains, which holds it there.
+            #
+            # A second depth check here was tried and reverted: evaluated every
+            # tick it toggles, which toggles the cap, which moves the queue, and
+            # the feed alternates on every message again - 29 changes in 30. The
+            # queue settling around half again over target is the cost of a feed
+            # that holds still, and that is the right way round.
             cap = self._cap_feed if self._building else self.feed
             allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)
             if allowed < 1:
