@@ -568,12 +568,13 @@ class JogScheduler:
             self._queue_mm += abs(detents) * self.step
             self.commanded_mm += detents * self.step
 
-            self._record(detents)
-
             self._ticks_since_motion = 0
             self.stats["messages"] += 1
             self.stats["detents"] += abs(detents)
+            self._record(detents)
             return protocol.jog(self.axis, detents, self.step, self.feed)
+
+        self._record(detents)
 
         if self._moving or self.feed > FEED_MIN_MM_MIN:
             # Let the smoothed feed fall while the wheel is still, or the first
@@ -599,7 +600,13 @@ class JogScheduler:
         return None
 
     def _record(self, detents):
-        """Keep a rolling trace, and flag a tick that carries far less than usual."""
+        """Keep a rolling trace, and flag the planner running dry.
+
+        Called on every tick, including those that emit nothing. Recording only
+        the ticks that emit made a pause invisible while it still drained the
+        queue, so a stall and a deliberate stop looked identical - one trace row
+        showing a drop of several ticks' drain with nothing to say why.
+        """
         carried = abs(detents) * self.step
         self.trace.append((round(self.feed), abs(detents), carried,
                            round(self._queue_mm, 1)))
@@ -614,9 +621,17 @@ class JogScheduler:
         drain = (self.feed / 60.0) * (TICK_MS / 1000.0)
         if self._queue_mm > drain:
             return
+
         recent = [row[2] for row in self.trace[:-1]]
         average = sum(recent) / len(recent)
         if average <= 0:
+            return
+
+        # Only a dry queue while the operator is still turning is a fault. One
+        # that empties because the wheel is slowing or stopped is the machine
+        # doing as it was told, and flagging those buries the real ones.
+        typical = sum(row[1] for row in self.trace[:-1]) / (len(self.trace) - 1)
+        if abs(detents) < typical * 0.5:
             return
 
         self.stats["messages"] += 0          # no-op, keeps the counter honest
