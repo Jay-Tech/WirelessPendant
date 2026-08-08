@@ -174,6 +174,22 @@ PLANNER_FILL_RATIO = 2.0
 # drops to the drain rate no matter how shallow the planner is.
 RUNAHEAD_LIMIT_S = 0.25
 
+# Floor under that bound, in millimetres.
+#
+# The measured lag is not all deliberate. Wifi, the sender's buffer, the
+# controller's receive buffer and the delay before a position is reported back
+# all contribute, and at a fine step they dominate: 0.1 mm measured 13-17 mm of
+# lag with the planner holding one block. A quarter second at F2375 is only
+# 9.9 mm, so the bound was already exceeded before any filling happened and it
+# suppressed the fill permanently - the planner sat empty, the reported feed
+# collapsed repeatedly, and a fifth of the operator's detents were discarded
+# because emission was pinned at the drain rate.
+#
+# The floor keeps the bound clear of that baseline at low feed, where it was
+# never the problem. The time term still governs at speed, which is where
+# run-ahead actually runs away.
+MIN_RUNAHEAD_MM = 25.0
+
 # --- turn rate drives feed, not distance ----------------------------------
 #
 # Spinning faster raises the feed rate. It does not multiply the distance.
@@ -704,6 +720,8 @@ class JogScheduler:
             # what puts the machine behind the hand, so once it is far enough
             # behind there is nothing a shallow planner can justify.
             runahead_mm = (self.feed / 60.0) * RUNAHEAD_LIMIT_S
+            if runahead_mm < MIN_RUNAHEAD_MM:
+                runahead_mm = MIN_RUNAHEAD_MM
             if self.planner_capacity and self.lag_mm <= runahead_mm:
                 held = self.planner_capacity - self.planner_free
                 shortfall = PLANNER_TARGET_BLOCKS - held

@@ -18,7 +18,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND, FEED_BUILD_TRIM,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
-                         RUNAHEAD_LIMIT_S)
+                         RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -550,8 +550,17 @@ check("  and a supplied one is fed at the drain rate",
 starved_far_behind, sent_far = run_at_depth(CAPACITY, lag_mm=10000.0)
 check("run-ahead past the limit stops the fill",
       sent_far <= sent_supplied, True)
-check("  and the limit scales with feed, not distance",
-      RUNAHEAD_LIMIT_S > 0, True)
+# The bound has to clear the baseline transport lag, which at a fine step is
+# larger than a quarter second of travel. Sized only on time it fired before
+# any filling had happened and held the planner empty.
+fine_lag = 17.0                      # measured at 0.1 mm with one block held
+fine_feed = 2375.0
+check("  and clears baseline transport lag at a fine step",
+      max((fine_feed / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM) > fine_lag, True)
+
+# While still binding where run-ahead actually runs away.
+check("  while still binding at a coarse step",
+      max((9000.0 / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM) < 96.0, True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.
