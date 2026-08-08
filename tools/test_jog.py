@@ -185,7 +185,7 @@ check("  so each move spans roughly a whole tick",
 enc, sched = new_scheduler()
 sched.set_step_index(COARSE)
 for _ in range(SETTLE):
-    enc.move(4 * 20)          # well past what the ceiling allows
+    enc.move(4 * 40)          # well past what the ceiling allows
     capped = sched.tick()
 check("feed is capped at the step's ceiling",
       capped["feed"], min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"]), tol=5.0)
@@ -194,7 +194,7 @@ check("feed is capped at the step's ceiling",
 enc, sched = new_scheduler(axis="Z")
 sched.set_step_index(COARSE)
 for _ in range(SETTLE):
-    enc.move(4 * 20)
+    enc.move(4 * 40)
     z_capped = sched.tick()
 check("Z is capped at its own lower ceiling",
       z_capped["feed"], AXIS_MAX_FEED["Z"], tol=5.0)
@@ -293,7 +293,7 @@ check("  having actually come down from the quick feed",
 enc, sched = new_scheduler()
 sched.set_step_index(COARSE)
 for _ in range(SETTLE):
-    enc.move(4 * 20)                     # demands well past the ceiling
+    enc.move(4 * 40)                     # demands well past the ceiling
     pinned = sched.tick()
 ceiling = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed reaches its ceiling rather than stalling short",

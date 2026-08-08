@@ -23,7 +23,17 @@ except ImportError:
     from pendant import protocol
 
 
-# 20 Hz. Raised from 50 Hz after machine testing.
+# 10 Hz. Raised from 50 Hz, then from 20 Hz, after machine testing.
+#
+# The binding constraint turned out not to be this scheduler at all. At 20 Hz
+# the machine reported a kept ratio falling from 79% to 31% across one traverse,
+# a lag peaking at 187 mm - about the depth of grblHAL's planner buffer - and
+# finally a ten second gap in the status stream as the sender blocked. That is
+# the controller being flooded: more jog blocks per second than it can parse,
+# plan and execute, so its buffer fills and everything upstream stalls behind it.
+#
+# Halving the rate halves the blocks and doubles the distance each carries. The
+# sender coalesces further on its own side, which is the real backpressure.
 #
 # A tick carries a whole number of detents, so at 20 ms and a fast wind a single
 # detent is 17% of the message. With the planner buffer near empty, any tick
@@ -34,7 +44,7 @@ except ImportError:
 #
 # The latency cost is nil in practice: the sender dispatches its own jogs every
 # 75 ms, so this was never the limiting quantiser.
-TICK_MS = 50
+TICK_MS = 100
 
 # Quadrature edges per detent, matching the decoder.
 COUNTS_PER_DETENT = 4
