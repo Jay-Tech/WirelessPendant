@@ -492,6 +492,22 @@ class JogScheduler:
         seconds = samples * TICK_MS / 1000.0
         return (total / COUNTS_PER_DETENT) / seconds
 
+    def set_planner_free(self, free):
+        """Record the controller's free planner slots, and learn its capacity.
+
+        Capacity is the largest count ever seen, which is the planner empty.
+        Learned here rather than while emitting, because a pendant sitting
+        still emits nothing - so capacity stayed zero while perfectly good
+        counts arrived, and anything reading it as "no Bf: report" was wrong
+        for the first few seconds of every session.
+
+        Zero capacity still means no report, and the emission cap falls back
+        accordingly, so a controller with the buffer-state bit off still jogs.
+        """
+        self.planner_free = free
+        if free > self.planner_capacity:
+            self.planner_capacity = free
+
     def feed_floor(self):
         """Lowest feed worth commanding at the current step.
 
@@ -692,12 +708,6 @@ class JogScheduler:
             # and stayed high while the planner underneath it ran dry, which is
             # why every conclusion drawn from it was wrong.
             #
-            # Capacity is the largest free count ever seen, which is the planner
-            # empty. Until a Bf: figure arrives capacity is zero and this falls
-            # back to the old modelled behaviour, so a controller with the
-            # buffer-state bit off still jogs.
-            if self.planner_free > self.planner_capacity:
-                self.planner_capacity = self.planner_free
             # Run-ahead is bounded before depth is even consulted. Filling is
             # what puts the machine behind the hand, so once it is far enough
             # behind there is nothing a shallow planner can justify.

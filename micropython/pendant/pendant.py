@@ -159,7 +159,7 @@ def on_message(message):
     free = message.get("bf")
     if free is not None and scheduler is not None:
         state["planner_free"] = free
-        scheduler.planner_free = free
+        scheduler.set_planner_free(free)
         if free:
             if free < state["planner_min"]:
                 state["planner_min"] = free

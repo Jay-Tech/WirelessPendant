@@ -523,6 +523,24 @@ check("  and a pause mid-turn still lowers the feed", sched.feed < turning, True
 import io  # noqa: E402
 from pendant import jog as _jog  # noqa: E402
 
+# Capacity has to be learned the moment a count arrives, not when a jog is
+# emitted. A pendant sitting still emits nothing, so learning it at emission
+# left capacity reading zero while perfectly good counts came in - and zero
+# capacity is how "no Bf: report at all" is detected, so every session began by
+# announcing a fault that was not there.
+enc, sched = new_scheduler()
+sched.set_planner_free(128)
+check("capacity is learned without any motion", sched.planner_capacity, 128)
+check("  and free is recorded with it", sched.planner_free, 128)
+
+sched.set_planner_free(120)
+check("  a lower count does not lower capacity", sched.planner_capacity, 128)
+check("    but is recorded as the current depth", sched.planner_free, 120)
+
+enc, sched = new_scheduler()
+check("no report leaves capacity at zero", sched.planner_capacity, 0)
+
+
 print("\ndiagnostic output")
 
 
@@ -622,11 +640,11 @@ enc.move(4 * 3)
 check("  and still emits", motion(sched.tick()) is not None, True)
 
 # Capacity is learned from the largest free count seen, so it needs no constant
-# and follows a controller with a different planner size.
+# and follows a controller with a different planner size. Through the setter,
+# not by assigning the attribute: learning it anywhere else is what made a
+# still pendant look like a controller with no Bf: report at all.
 enc, sched = new_scheduler()
-sched.planner_free = 35
-enc.move(4)
-sched.tick()
+sched.set_planner_free(35)
 check("capacity is learned from the reported maximum", sched.planner_capacity, 35)
 
 print()
