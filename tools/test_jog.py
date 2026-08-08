@@ -15,7 +15,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          QUEUE_TICKS, STEP_MAX_FEED, AXIS_MAX_FEED,
-                         FEED_HYSTERESIS_UP, FEED_HYSTERESIS_DOWN)
+                         FEED_DEADBAND)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -26,8 +26,8 @@ failures = []
 
 
 def check(label, got, want, tol=None):
-    # Feed converges asymptotically under smoothing, so exact equality would
-    # only ever pass by accident of iteration count.
+    # Feed is quantised by the deadband, so an exact comparison would be
+    # asserting the deadband width rather than the behaviour under test.
     if tol is not None and isinstance(got, float) and isinstance(want, float):
         ok = abs(got - want) <= tol
     else:
@@ -240,7 +240,7 @@ for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 9)
     faster = sched.tick()
 check("  but still follows a real change in speed",
-      faster["feed"] > settled[-1] * (1 + FEED_HYSTERESIS_UP), True)
+      faster["feed"] > settled[-1] * (1 + FEED_DEADBAND), True)
 
 # Reported from the machine: after a stumble the feed stopped matching the hand
 # and stayed rough. A symmetric band strands the feed above the target after any
@@ -257,9 +257,22 @@ for _ in range(RATE_WINDOW_TICKS * 3):
     slowed = sched.tick()
 commanded = 100 * STEP_SIZES[COARSE] * 60
 check("feed follows a slowdown rather than stranding high",
-      slowed["feed"] <= commanded * (1 + FEED_HYSTERESIS_DOWN) + 1, True)
+      slowed["feed"] <= commanded * (1 + FEED_DEADBAND) + 1, True)
 check("  having actually come down from the quick feed",
       slowed["feed"] < quick["feed"], True)
+
+# Climbing towards a ceiling must actually arrive at it. Easing towards a target
+# from inside a deadband strands the feed short: each step shrinks until the
+# remaining gap fits in the band, and there it stops - persistently below the
+# rate being commanded, which grows the queue and brings the jerking back.
+enc, sched = new_scheduler()
+sched.set_step_index(COARSE)
+for _ in range(RATE_WINDOW_TICKS * 4):
+    enc.move(4 * 6)                      # demands well past the ceiling
+    pinned = sched.tick()
+ceiling = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
+check("feed reaches its ceiling rather than stalling short",
+      pinned["feed"], ceiling, tol=1.0)
 
 print("\nrest dither")
 

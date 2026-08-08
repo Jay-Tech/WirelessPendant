@@ -101,31 +101,22 @@ AXIS_MAX_FEED = {"X": 15000.0, "Y": 15000.0, "Z": 6000.0, "A": 6000.0}
 # wind-down stutter, but hand turning is irregular detent to detent so the raw
 # figure jumps around and the motion feels rough. This damps a one-tick spike
 # while still following a real change within a few ticks - roughly 50 ms at 0.4.
-FEED_SMOOTHING = 0.25
-
-# Fractional change required before the commanded feed is allowed to move.
+# Fractional change in the target before the commanded feed follows it.
 #
-# grblHAL blends consecutive moves that share a feed rate. A feed that drifts
-# every message forces a velocity change between every block - accelerate,
-# decelerate, accelerate - which is felt as jerking once up to speed. Clamping
-# the feed to a constant made it smooth, which is what identified this.
+# grblHAL blends consecutive moves that share a feed rate, so a feed drifting
+# every message forces a velocity change between every block and is felt as
+# jerking. A deadband produces long runs of identical F instead.
 #
-# Smoothing does not help: it changes how fast the feed moves, not how often, so
-# every message still carries a different number. Holding the feed until it has
-# genuinely changed produces long runs of identical F, which blend.
-# Asymmetric on purpose. The two directions of error are not equally harmful:
+# Outside the band the feed jumps straight to the target rather than easing
+# towards it. Easing plus a deadband is what stranded the feed short: each step
+# shrinks until the remaining gap falls inside the band, and there it stops -
+# permanently below the rate being commanded. Under-feeding is the harmful
+# direction, because distance then arrives faster than it drains, the queue
+# grows and the bound starts discarding, which is the jerk returning.
 #
-#   feed too HIGH - each move finishes early and waits, so the machine stops
-#                   between blocks. This is the stutter, and it persists until
-#                   the target has fallen far enough to leave the band.
-#   feed too LOW  - distance arrives faster than it drains, which the queue
-#                   bound absorbs by dropping. Less pleasant but self-limiting.
-#
-# So rising resists change, to keep consecutive feeds identical and let the
-# planner blend, while falling follows promptly. A symmetric band left the feed
-# stranded high after any slowdown.
-FEED_HYSTERESIS_UP = 0.20
-FEED_HYSTERESIS_DOWN = 0.08
+# Ten percent, symmetric. The rate average already removes jitter, so this only
+# has to absorb what survives it.
+FEED_DEADBAND = 0.10
 
 # Ceiling per step size, matching STEP_SIZES.
 #
@@ -347,19 +338,10 @@ class JogScheduler:
         if not self._moving:
             return target
 
-        # Hold the current feed unless the target has left the band. Identical
-        # consecutive feeds are what let the planner blend.
-        band = (FEED_HYSTERESIS_UP if target > self.feed
-                else FEED_HYSTERESIS_DOWN)
-        if abs(target - self.feed) < self.feed * band:
+        # Hold unless the target has left the band; otherwise take it exactly.
+        if abs(target - self.feed) < self.feed * FEED_DEADBAND:
             return self.feed
-
-        feed = self.feed + FEED_SMOOTHING * (target - self.feed)
-        if feed < FEED_MIN_MM_MIN:
-            feed = FEED_MIN_MM_MIN
-        elif feed > ceiling:
-            feed = ceiling
-        return feed
+        return target
 
     def tick(self):
         """Advance one interval. Returns a message to send, or None."""
@@ -435,7 +417,7 @@ class JogScheduler:
         if self._moving or self.feed > FEED_MIN_MM_MIN:
             # Let the smoothed feed fall while the wheel is still, or the first
             # detent after a pause would inherit the speed of the last burst.
-            self.feed += FEED_SMOOTHING * (FEED_MIN_MM_MIN - self.feed)
+            self.feed += FEED_DEADBAND * (FEED_MIN_MM_MIN - self.feed)
             if self.feed < FEED_MIN_MM_MIN:
                 self.feed = FEED_MIN_MM_MIN
 
