@@ -114,12 +114,15 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 # nothing at all - free at the maximum, reported feed at zero, for around
 # 150 ms at a time. That is a dead stop mid-traverse, and it is the jerk.
 #
-# Six blocks is 300 ms at a 50 ms tick: double the longest observed stall,
-# and the run-off it costs on stopping is 45 mm at F9000. Deeper survives
-# more but overruns further, and the cancel that would bound that cannot be
-# made prompt without breaking re-grip - a pause to reposition the hand and
-# a genuine stop are the same length. So depth is the dial, and this is the
-# conservative end of it.
+# Four blocks is 200 ms at a 50 ms tick, against a longest observed stall of
+# 150 ms. Six was tried first and held the feed perfectly, but the machine ran
+# 98 mm behind the hand and peaked at 129 mm, which is about a second of
+# coasting after the wheel stops - more overrun than is wanted at 0.5 mm.
+#
+# Depth is the only dial for that. The prompt cancel that would bound run-off
+# independently cannot be built: a pause to reposition the hand and a genuine
+# stop are the same length, so any threshold short enough to stop the axis
+# promptly also chops a re-grip in half.
 #
 # It happened because emission was capped at exactly what the commanded feed
 # drains in a tick. Sending precisely what the machine consumes means depth can
@@ -131,7 +134,7 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 #
 # So run ahead of the drain until the controller holds a real cushion, then
 # match the drain to hold it there. Depth is measured, not assumed.
-PLANNER_TARGET_BLOCKS = 6
+PLANNER_TARGET_BLOCKS = 4
 
 # Ceiling on how far above the drain rate to emit, reached only when the
 # planner is completely empty. Two means the buffer gains a tick of work per
@@ -428,11 +431,24 @@ class JogScheduler:
         Starting from rest there is no history to average, so the interval since
         the last movement is used instead - accurate from the very first detent,
         which is what keeps the opening of a turn from being throttled.
+
+        That interval only means anything for a single detent, though. Several
+        arriving inside one tick demonstrably arrived within that tick, whatever
+        preceded them, so the tick is the measurement window. Dividing them by
+        the whole idle gap instead reported a near-zero turn rate for the first
+        detent after any pause, so a burst opened at the floor feed and took
+        nine ticks to reach speed - felt as having to spin the wheel a while
+        before the machine responds.
         """
         if not detents:
             return 0.0
 
         if not self._moving:
+            if abs(detents) > 1:
+                return abs(detents) / (TICK_MS / 1000.0)
+            # A lone detent says only that one arrived somewhere in the gap, so
+            # the gap is the best estimate - and a deliberate single click for
+            # fine positioning stays slow, which is the point.
             ticks = self._ticks_since_motion
             if ticks < 1:
                 ticks = 1
@@ -594,6 +610,15 @@ class JogScheduler:
             self._recent.pop(0)
 
         if detents:
+            # A burst starts with a clean window. Idle ticks are appended above
+            # so a pause mid-turn decays the feed, which is right - but carrying
+            # them into a fresh start divides the first real samples by the
+            # whole window and reports a fraction of the true turn rate. That
+            # was the ramp: nine ticks climbing from the floor before the
+            # machine matched the hand.
+            if not self._moving:
+                self._recent = [counts]
+
             # A reversal has to flush what is queued. The buffer that keeps the
             # planner supplied is motion in the old direction, so without this
             # the machine travels the whole of it the wrong way before it starts

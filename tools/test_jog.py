@@ -462,6 +462,47 @@ enc.move(4)
 check("  and motion while disabled is discarded, not replayed",
       motion(sched.tick()), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
 
+print("\nstarting from rest")
+
+
+def first_feed(detents, step=0.5, idle=40):
+    """Feed commanded by the opening tick of a burst after a pause."""
+    enc, sched = new_scheduler()
+    for _ in range(STEP_SIZES.index(step) - STEP_SIZES.index(0.1)):
+        sched.step_up()
+    for _ in range(idle):
+        sched.tick()
+    enc.move(4 * detents)
+    message = sched.tick()
+    return message["feed"] if message else 0
+
+
+# The opening tick has to match the hand. Dividing the first detents by the
+# whole idle gap - or averaging them against a window still full of idle zeros -
+# reports a fraction of the real turn rate, so a burst opens at the floor and
+# climbs for nine ticks. On the machine that is having to spin the wheel a while
+# before anything happens.
+fast = first_feed(14)
+check("a hard start reaches speed on the first tick", fast > 8000, True)
+check("  and a gentle one is proportional, not full speed",
+      FEED_MIN_MM_MIN < first_feed(6) < fast, True)
+
+# The other half of the same trade. A single click is a deliberate nudge for
+# fine positioning and the idle gap is the only evidence of its speed, so it
+# has to stay slow or fine work turns twitchy.
+check("  while a lone click stays at the floor", first_feed(1), FEED_MIN_MM_MIN)
+
+# A pause mid-turn must still decay the feed - which is why idle ticks enter the
+# window at all. Only a start from rest clears it.
+enc, sched = new_scheduler()
+for _ in range(12):
+    enc.move(4 * 8)
+    sched.tick()
+turning = sched.feed
+for _ in range(6):
+    sched.tick()
+check("  and a pause mid-turn still lowers the feed", sched.feed < turning, True)
+
 print("\nplanner depth regulation")
 
 # The controller reports free planner slots. Emission runs above the drain rate
