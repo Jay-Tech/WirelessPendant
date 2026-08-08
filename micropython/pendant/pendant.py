@@ -93,7 +93,8 @@ screen = None
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
-         "last_collapse_dump": -60000}
+         "last_collapse_dump": -60000, "planner_free": 0,
+         "planner_min": 999, "planner_max": 0}
 
 
 def on_message(message):
@@ -109,6 +110,20 @@ def on_message(message):
     # executing one block at a time and decelerating at the end of each - the
     # symptom the operator sees as 0 to 9000 and back, and the one thing no
     # amount of pendant-side instrumentation could ever show.
+    # Free planner slots at the controller. The pendant models a queue it has
+    # sent ahead, but until now had no way to check that model against the one
+    # place it matters. A buffer that never fills means the lookahead the
+    # scheduler assumes it is building does not exist.
+    free = message.get("bf")
+    if free is not None and scheduler is not None:
+        state["planner_free"] = free
+        scheduler.planner_free = free
+        if free:
+            if free < state["planner_min"]:
+                state["planner_min"] = free
+            if free > state["planner_max"]:
+                state["planner_max"] = free
+
     actual = message.get("fr")
     if actual is not None and scheduler is not None:
         state["actual_feed"] = actual
@@ -123,8 +138,10 @@ def on_message(message):
             if time.ticks_diff(now, state["last_collapse_dump"]) > COLLAPSE_DUMP_QUIET_MS:
                 state["last_collapse_dump"] = now
                 scheduler.dump_trace(
-                    "feed collapse {}: commanded {:.0f}, actual {}".format(
-                        state["feed_collapses"], commanded, actual))
+                    "feed collapse {}: commanded {:.0f}, actual {}, "
+                    "planner free {}".format(
+                        state["feed_collapses"], commanded, actual,
+                        state["planner_free"]))
 
     # Everything below here is diagnostic. It runs inside the receive loop, so
     # anything it raises would kill the session and present as a link that will

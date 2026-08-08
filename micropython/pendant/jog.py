@@ -307,6 +307,7 @@ class JogScheduler:
         self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
         self._settled = FEED_MIN_MM_MIN   # deadbanded feed, before any trim
         self.actual_feed = 0          # what the controller reports, pushed in
+        self.planner_free = 0         # controller's free planner slots, ditto
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -659,8 +660,13 @@ class JogScheduler:
         # so a dump shows whether an actual dip follows a commanded change or
         # happens while the command is perfectly steady. Those are different
         # faults and nothing else distinguishes them.
+        # planner_free is the decisive column. The queue column is what this
+        # scheduler *believes* it has sent ahead; planner_free is what the
+        # controller actually holds. When the two disagree the model is wrong,
+        # and every conclusion drawn from the queue column is worthless.
         self.trace.append((round(self.feed), round(self.actual_feed),
-                           abs(detents), carried, round(self._queue_mm, 1)))
+                           abs(detents), carried, round(self._queue_mm, 1),
+                           self.planner_free))
         if len(self.trace) > TRACE_TICKS:
             self.trace.pop(0)
 
@@ -696,10 +702,10 @@ class JogScheduler:
     def dump_trace(self, reason):
         """Print the rolling trace with a reason. Rate-limited by the caller."""
         print("[trace] {}".format(reason))
-        print("  cmdF  actF  det   mm  queue")
-        for feed, actual, det, mm, queue in self.trace:
-            print("  {:>5} {:>5} {:>4} {:>5.2f} {:>5.1f}".format(
-                feed, actual, det, mm, queue))
+        print("  cmdF  actF  det   mm  queue  free")
+        for feed, actual, det, mm, queue, free in self.trace:
+            print("  {:>5} {:>5} {:>4} {:>5.2f} {:>5.1f} {:>5}".format(
+                feed, actual, det, mm, queue, free))
 
     async def run(self, link):
         """Drive the scheduler forever, handing messages to the link."""
