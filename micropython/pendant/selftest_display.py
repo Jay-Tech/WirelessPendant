@@ -19,9 +19,11 @@ from machine import Pin, SPI
 try:
     from ili9341 import BLACK, WHITE, RED, GREEN, BLUE, AMBER, GREY
     from screen import DroScreen
+    from ili9341 import ILI9341
 except ImportError:
     from pendant.ili9341 import BLACK, WHITE, RED, GREEN, BLUE, AMBER, GREY
     from pendant.screen import DroScreen
+    from pendant.ili9341 import ILI9341
 
 SPI_ID = 0
 PIN_SCK = 18
@@ -48,7 +50,7 @@ def main():
               sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI))
 
     started = time.ticks_ms()
-    screen = DroScreen(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL)
+    screen = DroScreen(ILI9341(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL))
     print("  panel initialised in {} ms".format(
         time.ticks_diff(time.ticks_ms(), started)))
     print("  {}x{}".format(screen.display.width, screen.display.height))
@@ -67,7 +69,7 @@ def main():
     print("  if they were swapped the panel is RGB, not BGR")
 
     # Rebuild the layout after the fills wiped it.
-    screen = DroScreen(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL)
+    screen = DroScreen(ILI9341(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL))
     screen.set_link(True)
     screen.set_mode("X", 0.1)
     screen.set_state("Idle")

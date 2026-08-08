@@ -71,6 +71,10 @@ DISPLAY_ENABLED = True
 SPI_ID = 0
 PIN_SCK, PIN_MOSI = 18, 19
 PIN_CS, PIN_DC, PIN_RST, PIN_BL = 17, 20, 21, 22
+
+# 90 is landscape on the ILI9341. A portrait panel would use 0 here and
+# the layout follows the reported width and height either way.
+ROTATION = 90
 SPI_BAUD = 20_000_000
 DISPLAY_REFRESH_MS = 100
 
@@ -269,12 +273,17 @@ def start_display():
         from machine import SPI
         try:
             from screen import DroScreen
+            from ili9341 import ILI9341
         except ImportError:
             from pendant.screen import DroScreen
+            from pendant.ili9341 import ILI9341
 
         spi = SPI(SPI_ID, baudrate=SPI_BAUD, polarity=0, phase=0,
                   sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI))
-        panel = DroScreen(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL)
+        # The panel is built here and handed to the layout, so fitting a
+        # different one is a change to this line rather than to the layout.
+        display = ILI9341(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL, ROTATION)
+        panel = DroScreen(display)
         panel.splash("connecting...")
         link.log("display on SPI{} at {} MHz".format(
             SPI_ID, SPI_BAUD // 1000000))
@@ -297,7 +306,7 @@ async def refresh_display():
         return
 
     # Replace the splash with the live layout now the panel is known good.
-    screen.__init__(screen.display._spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL)
+    screen.build()
 
     while True:
         try:
