@@ -305,6 +305,7 @@ class JogScheduler:
         self._building = True         # buffer still filling
         self._direction = 0           # sign of motion currently in flight
         self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
+        self._settled = FEED_MIN_MM_MIN   # deadbanded feed, before any trim
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -483,10 +484,18 @@ class JogScheduler:
             return target
 
         # Hold unless the target has left the band; otherwise take it exactly.
-        if abs(target - self.feed) < self.feed * FEED_DEADBAND:
-            settled = self.feed
+        #
+        # Compared against the untrimmed settled value, never against the
+        # commanded feed. The commanded feed already has the trim in it, so
+        # comparing to that re-trims an already-trimmed number every tick and
+        # the gap alternately clears and fails the band - a perfect two-cycle
+        # that put a different feed on every message and stopped grblHAL
+        # blending any of them.
+        if abs(target - self._settled) < self._settled * FEED_DEADBAND:
+            settled = self._settled
         else:
             settled = target
+        self._settled = settled
 
         # The trim goes on after the deadband. Applied before it, a change this
         # small falls inside the band, is suppressed, and the buffer never
