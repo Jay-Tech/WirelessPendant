@@ -80,6 +80,9 @@ DISPLAY_REFRESH_MS = 100
 FEED_COLLAPSE_RATIO = 0.5
 FEED_COLLAPSE_FLOOR = 500
 
+# One dump per episode, not per status frame.
+COLLAPSE_DUMP_QUIET_MS = 3000
+
 STATUS_REPORT_S = 15
 
 encoder = None
@@ -89,7 +92,8 @@ screen = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
-         "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0}
+         "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
+         "last_collapse_dump": -60000}
 
 
 def on_message(message):
@@ -108,9 +112,19 @@ def on_message(message):
     actual = message.get("fr")
     if actual is not None and scheduler is not None:
         state["actual_feed"] = actual
+        scheduler.actual_feed = actual
         commanded = scheduler.feed
         if commanded > FEED_COLLAPSE_FLOOR and actual < commanded * FEED_COLLAPSE_RATIO:
             state["feed_collapses"] += 1
+            # Dump the trace at the moment the machine falls behind what it was
+            # asked for, rate-limited so one episode is one dump. This is the
+            # only view that shows both numbers on the same timeline.
+            now = time.ticks_ms()
+            if time.ticks_diff(now, state["last_collapse_dump"]) > COLLAPSE_DUMP_QUIET_MS:
+                state["last_collapse_dump"] = now
+                scheduler.dump_trace(
+                    "feed collapse {}: commanded {:.0f}, actual {}".format(
+                        state["feed_collapses"], commanded, actual))
 
     # Everything below here is diagnostic. It runs inside the receive loop, so
     # anything it raises would kill the session and present as a link that will

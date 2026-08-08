@@ -306,6 +306,7 @@ class JogScheduler:
         self._direction = 0           # sign of motion currently in flight
         self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
         self._settled = FEED_MIN_MM_MIN   # deadbanded feed, before any trim
+        self.actual_feed = 0          # what the controller reports, pushed in
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -654,8 +655,12 @@ class JogScheduler:
         showing a drop of several ticks' drain with nothing to say why.
         """
         carried = abs(detents) * self.step
-        self.trace.append((round(self.feed), abs(detents), carried,
-                           round(self._queue_mm, 1)))
+        # The controller's own feed goes in the same row as the commanded one,
+        # so a dump shows whether an actual dip follows a commanded change or
+        # happens while the command is perfectly steady. Those are different
+        # faults and nothing else distinguishes them.
+        self.trace.append((round(self.feed), round(self.actual_feed),
+                           abs(detents), carried, round(self._queue_mm, 1)))
         if len(self.trace) > TRACE_TICKS:
             self.trace.pop(0)
 
@@ -668,7 +673,7 @@ class JogScheduler:
         if self._queue_mm > drain:
             return
 
-        recent = [row[2] for row in self.trace[:-1]]
+        recent = [row[3] for row in self.trace[:-1]]
         average = sum(recent) / len(recent)
         if average <= 0:
             return
@@ -676,7 +681,7 @@ class JogScheduler:
         # Only a dry queue while the operator is still turning is a fault. One
         # that empties because the wheel is slowing or stopped is the machine
         # doing as it was told, and flagging those buries the real ones.
-        typical = sum(row[1] for row in self.trace[:-1]) / (len(self.trace) - 1)
+        typical = sum(row[2] for row in self.trace[:-1]) / (len(self.trace) - 1)
         if abs(detents) < typical * 0.5:
             return
 
@@ -685,11 +690,16 @@ class JogScheduler:
         if self.stats["messages"] - self._last_dump < TRACE_QUIET_TICKS:
             return
         self._last_dump = self.stats["messages"]
-        print("[starved {}] queue {:.2f} mm, carried {:.2f} against an average of {:.2f}".format(
-            self.stumbles, self._queue_mm, carried, average))
-        print("  feed  det   mm  queue")
-        for feed, det, mm, queue in self.trace:
-            print("  {:>5} {:>4} {:>5.2f} {:>5.1f}".format(feed, det, mm, queue))
+        self.dump_trace("starved {}: queue {:.2f} mm".format(
+            self.stumbles, self._queue_mm))
+
+    def dump_trace(self, reason):
+        """Print the rolling trace with a reason. Rate-limited by the caller."""
+        print("[trace] {}".format(reason))
+        print("  cmdF  actF  det   mm  queue")
+        for feed, actual, det, mm, queue in self.trace:
+            print("  {:>5} {:>5} {:>4} {:>5.2f} {:>5.1f}".format(
+                feed, actual, det, mm, queue))
 
     async def run(self, link):
         """Drive the scheduler forever, handing messages to the link."""
