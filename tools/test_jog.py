@@ -22,6 +22,15 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
 COARSE = STEP_SIZES.index(1.0)
 FINE = STEP_SIZES.index(0.01)
 
+# Long enough for the planner-buffer trim to release, so these measure the
+# settled feed rather than the transient while the buffer fills.
+SETTLE = RATE_WINDOW_TICKS * 6
+
+def feed_for(detents_per_tick, step):
+    """Feed the scheduler should command for a given arrival rate."""
+    return (detents_per_tick / (TICK_MS / 1000.0)) * step * 60.0
+
+
 failures = []
 
 
@@ -126,7 +135,7 @@ print("\nfeed tracking")
 per_detent = []
 for rate in (1, 2, 3):
     enc, sched = new_scheduler()
-    for _ in range(RATE_WINDOW_TICKS * 2):
+    for _ in range(SETTLE):
         enc.move(4 * rate)
         message = sched.tick()
     per_detent.append(abs(message["det"] * message["step"]) / rate)
@@ -137,19 +146,21 @@ check("distance per detent is identical at every turn speed",
 # every tick and runs on after the wheel stops.
 enc, sched = new_scheduler()
 sched.set_step_index(COARSE)             # 1.0 mm per detent
-for _ in range(RATE_WINDOW_TICKS * 2):
-    enc.move(4)                          # 1 detent per 20 ms = 50 detents/s
+for _ in range(SETTLE):
+    enc.move(4)                          # 1 detent per tick
     tracked = sched.tick()
-check("feed meets the commanded rate", tracked["feed"], 50 * 1.0 * 60, tol=1.0)
+check("feed meets the commanded rate",
+      tracked["feed"], feed_for(1, STEP_SIZES[COARSE]), tol=1.0)
 
 # Feed must not exceed the commanded rate. Over-feeding makes each move finish
 # early and stop, so the planner accelerates and decelerates once per detent -
 # which is what made fine steps violent on the machine.
 enc, sched = new_scheduler()
-for _ in range(RATE_WINDOW_TICKS * 2):
-    enc.move(4 * 3)                      # 150 detents/s at 0.1 mm
+for _ in range(SETTLE):
+    enc.move(4 * 3)
     fine = sched.tick()
-check("feed never exceeds the commanded rate", fine["feed"], 150 * 0.1 * 60, tol=1.0)
+check("feed never exceeds the commanded rate",
+      fine["feed"], feed_for(3, 0.1), tol=1.0)
 
 # Which means a move lasts about a full tick, so consecutive jogs join up
 # instead of each one starting and stopping.
@@ -161,8 +172,8 @@ check("  so each move spans roughly a whole tick",
 # the queue this design exists to keep shallow.
 enc, sched = new_scheduler()
 sched.set_step_index(COARSE)
-for _ in range(RATE_WINDOW_TICKS * 2):
-    enc.move(4 * 6)                      # 300 detents/s at 1 mm
+for _ in range(SETTLE):
+    enc.move(4 * 20)          # well past what the ceiling allows
     capped = sched.tick()
 check("feed is capped at the step's ceiling",
       capped["feed"], min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"]), tol=5.0)
@@ -170,8 +181,8 @@ check("feed is capped at the step's ceiling",
 # Z is far slower than X and Y here, so the ceiling has to follow the axis.
 enc, sched = new_scheduler(axis="Z")
 sched.set_step_index(COARSE)
-for _ in range(RATE_WINDOW_TICKS * 3):
-    enc.move(4 * 6)
+for _ in range(SETTLE):
+    enc.move(4 * 20)
     z_capped = sched.tick()
 check("Z is capped at its own lower ceiling",
       z_capped["feed"], AXIS_MAX_FEED["Z"], tol=5.0)
@@ -202,10 +213,11 @@ check("feed tracking can be disabled", sched.tick()["feed"], FEED_MAX_MM_MIN)
 # A pause must not leave a high feed armed for the next careful detent - that
 # would make the first move after a pause far faster than intended.
 enc, sched = new_scheduler()
-for _ in range(RATE_WINDOW_TICKS * 2):
-    enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
+for _ in range(SETTLE):
+    enc.move(4 * 6)
     spinning = sched.tick()
-check("fast turning raises the feed", spinning["feed"], STEP_MAX_FEED[2], tol=5.0)
+check("fast turning raises the feed",
+      spinning["feed"], min(feed_for(6, 0.1), STEP_MAX_FEED[2]), tol=5.0)
 
 for _ in range(RATE_WINDOW_TICKS):
     sched.tick()                         # idle; the window fills with zeros
@@ -226,7 +238,7 @@ sched.set_step_index(COARSE)                    # headroom below the ceiling, so
                                                 # not the cap
 feeds = []
 wobble = (3, 3, 4, 3, 2, 3, 4, 3, 3, 2, 3, 4)   # a real hand is not metronomic
-for _ in range(4):
+for _ in range(8):
     for detents in wobble:
         enc.move(4 * detents)
         message = sched.tick()
@@ -267,8 +279,8 @@ check("  having actually come down from the quick feed",
 # rate being commanded, which grows the queue and brings the jerking back.
 enc, sched = new_scheduler()
 sched.set_step_index(COARSE)
-for _ in range(RATE_WINDOW_TICKS * 4):
-    enc.move(4 * 6)                      # demands well past the ceiling
+for _ in range(SETTLE):
+    enc.move(4 * 20)                     # demands well past the ceiling
     pinned = sched.tick()
 ceiling = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed reaches its ceiling rather than stalling short",

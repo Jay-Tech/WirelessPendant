@@ -23,9 +23,18 @@ except ImportError:
     from pendant import protocol
 
 
-# 50 Hz. See module docstring: comfortably inside the sender's 75 ms dispatch
-# interval, so this scheduler is not the bottleneck.
-TICK_MS = 20
+# 20 Hz. Raised from 50 Hz after machine testing.
+#
+# A tick carries a whole number of detents, so at 20 ms and a fast wind a single
+# detent is 17% of the message. With the planner buffer near empty, any tick
+# that comes up one detent short leaves it nothing to execute and it
+# decelerates - which is a continuous jerk through a long move, with grblHAL's
+# reported feed oscillating while the pendant's commanded feed sits perfectly
+# still. At 50 ms the same detent is 7% of a message three times the size.
+#
+# The latency cost is nil in practice: the sender dispatches its own jogs every
+# 75 ms, so this was never the limiting quantiser.
+TICK_MS = 50
 
 # Quadrature edges per detent, matching the decoder.
 COUNTS_PER_DETENT = 4
@@ -176,6 +185,21 @@ STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 # roughness of their own.
 QUEUE_TICKS = 5.0
 
+# Depth of in-flight motion the planner should be kept supplied with, as a
+# fraction of the bound above.
+#
+# Commanding exactly the arrival rate leaves the queue hovering at zero: the
+# machine consumes distance as fast as it is delivered, so there is no buffer to
+# absorb the jitter of whole detents and the planner runs dry on any short tick.
+# Below this depth the feed is trimmed so the machine consumes slightly slower
+# than the wheel delivers, and a buffer establishes itself. Above it the feed is
+# exactly the arrival rate again, so distance stays true.
+QUEUE_TARGET_FRACTION = 0.5
+
+# How much the feed is trimmed while building that buffer. Small, because it is
+# a transient - once the buffer is at depth the feed returns to the arrival rate.
+FEED_BUILD_TRIM = 0.85
+
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
 #
@@ -313,7 +337,8 @@ class JogScheduler:
         if not self.feed_tracking:
             return FEED_MAX_MM_MIN
 
-        # Exactly the rate being commanded - no more.
+        # Exactly the rate being commanded - no more, except while the planner
+        # buffer is still filling.
         #
         # Feeding faster than commanded is not free, which an earlier version
         # got wrong. Distance per detent is fixed, so a higher feed does not
@@ -329,6 +354,14 @@ class JogScheduler:
         # does the same thing - feed straight from encoder velocity, with no
         # curve above it.
         target = self.turn_rate(detents) * self.step * 60.0
+
+        # While the buffer is shallow, consume a little slower than the wheel
+        # delivers so it can fill. Without this the queue sits at zero and every
+        # short tick starves the planner.
+        bound = (target / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
+        if self._queue_mm < bound * QUEUE_TARGET_FRACTION:
+            target *= FEED_BUILD_TRIM
+
         ceiling = STEP_MAX_FEED[self.step_index]
         axis_ceiling = AXIS_MAX_FEED.get(self.axis, FEED_MAX_MM_MIN)
         if axis_ceiling < ceiling:
