@@ -162,7 +162,7 @@ FEED_DEADBAND = 0.10
 # So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
 # only fully usable below about 250 detents/s. That is a property of the wheel
 # and the machine, not something a ceiling can fix.
-STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
+STEP_MAX_FEED = (150.0, 250.0, 2500.0, 9000.0, 12000.0)
 
 # Millimetres of motion allowed to be in flight at once.
 #
@@ -204,63 +204,6 @@ STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 # roughness of their own.
 QUEUE_MS = 200.0
 
-# Ceiling per step size, matching STEP_SIZES.
-#
-# The fine values are measured on the machine rather than derived - they came
-# out roughly a third of what seemed reasonable on paper, which says a fine step
-# wants control far more than speed.
-#
-# The coarse ones now run to the machine's real limit, because anything less
-# throws away turning the operator is actually doing. Measured on the machine at
-# roughly 4 rev/s - 400 detents/s - the demand is step x 400 x 60:
-#
-#   0.5 mm -> 12000 mm/min, which X and Y can deliver in full
-#   1.0 mm -> 24000 mm/min, which nothing can, so 1 mm sheds ~38% at that speed
-#
-# So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
-# only fully usable below about 250 detents/s. That is a property of the wheel
-# and the machine, not something a ceiling can fix.
-STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
-
-# Millimetres of motion allowed to be in flight at once.
-#
-# This is, directly, how far the machine can still travel after the wheel stops.
-# The scheduler tracks an estimate of the queue - adding what it commands,
-# subtracting what the current feed drains each tick - and refuses to add beyond
-# this.
-#
-# Bounding accumulated distance rather than per-tick distance matters: a single
-# quick tick is harmless and must not be clipped, while sustained over-turning
-# is exactly what banked up unboundedly and made run-on grow the longer the
-# pendant was used.
-#
-# The surplus is dropped, not deferred. Turning faster than the machine can
-# follow cannot be honoured - the choice is only between lagging and dropping,
-# and a pendant that saves motion to replay after you stop is far worse than one
-# that simply stops keeping up.
-# In-flight motion is bounded to this many milliseconds of travel at the current
-# feed, rather than to a fixed distance or a number of ticks.
-#
-# Milliseconds, not ticks, because this is directly how far the machine coasts
-# after the wheel stops - and expressing it in ticks tied it to TICK_MS. Raising
-# the tick from 20 ms to 100 ms silently multiplied the run-on fivefold, to half
-# a second of travel: 100 mm at F12000, which is what "too much run off" was.
-#
-# It is also the planner's buffer, so it cannot go too small either. Below about
-# a tick and a half there is nothing left to absorb arrival jitter and the
-# planner starves. This is the knob that trades run-on against smoothness.
-#
-# A constant is wrong because what it means changes with speed. At 1500 mm/s^2,
-# stopping from F15000 takes 20.8 mm and from F1000 takes 0.09 mm - so 3 mm was
-# simultaneously negligible at traverse and a large overshoot while creeping.
-# Expressed in ticks it becomes a bounded amount of *time*, about 60 ms of
-# motion, which is what the operator perceives as run-on.
-#
-# Five rather than three: at a coarse step near the ceiling, what arrives each
-# tick and what drains are nearly equal, so a tight bound tips in and out of
-# dropping on small variations and the resulting irregular distances are felt as
-# roughness of their own.
-QUEUE_MS = 200.0
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
