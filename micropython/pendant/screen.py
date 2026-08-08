@@ -252,7 +252,7 @@ class DroScreen:
         self._last_position = {}
         self.set_position((0.0, 0.0, 0.0))
         self.set_state("?")
-        self.set_mode("?", 0.0, True, 0.0)
+        self.set_mode("?", 0.0, 0.0)
         self.set_link(False)
 
     def _build_step_zones(self, top):
@@ -324,7 +324,7 @@ class DroScreen:
     def set_state(self, state):
         self._state.set(state, STATE_COLORS.get(state, WHITE))
 
-    def set_mode(self, axis, step, halt_on_stop=True, feed=0.0):
+    def set_mode(self, axis, step, feed=0.0):
         # Feed only. Distance per detent never changes, so a rising number
         # here is the only visible sign that winding faster is doing anything -
         # whereas axis and step are already shown by which row and which cell

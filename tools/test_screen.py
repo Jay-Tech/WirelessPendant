@@ -208,7 +208,7 @@ check("  and registers no step zone", screen.zones.hit(160, 200), None)
 # The selected axis carries a border like the step cells, and every row carries
 # a dim one - which is the only thing on the panel saying the rows are tappable
 # at all.
-tall_screen.set_mode("Y", 0.1, True, 0.0)
+tall_screen.set_mode("Y", 0.1, 0.0)
 check("every row has a border box, not just the selected one",
       sorted(tall_screen._axis_boxes), sorted(AXES))
 selected_box = tall_screen._axis_boxes["Y"]

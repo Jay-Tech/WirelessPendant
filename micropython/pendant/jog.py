@@ -329,15 +329,6 @@ class JogScheduler:
         self.step_index = step_index
         self.enabled = True
 
-        # True gives velocity-follow: stopping the wheel flushes queued motion
-        # and halts, so the machine never runs on past your hand. False gives
-        # queue-and-execute: every detent is honoured exactly, at the cost of
-        # the machine lagging behind a fast spin and continuing after you stop.
-        #
-        # Exposed as a flag rather than a constant so the two can be compared
-        # on a real machine from the REPL, without a reflash between runs.
-        self.cancel_on_stop = True
-
         self.feed_tracking = FEED_TRACKING_ENABLED
 
         self._residual = 0
@@ -748,12 +739,12 @@ class JogScheduler:
                 self.feed = floor
 
         if self._moving:
-            if not self.cancel_on_stop:
-                # Queue-and-execute: let the commanded motion finish on its own.
-                self._moving = False
-                self._idle_ticks = 0
-                return None
-
+            # Stopping the wheel always flushes what is queued. The alternative
+            # - letting commanded motion finish on its own - was a mode here
+            # while the two were being compared on the machine, and lost: how
+            # far the axis ended up depended on how deep the buffer happened to
+            # be when the hand stopped, which is exactly the unpredictability
+            # this design exists to avoid.
             self._idle_ticks += 1
             if self._idle_ticks >= IDLE_TICKS_BEFORE_CANCEL:
                 self._moving = False

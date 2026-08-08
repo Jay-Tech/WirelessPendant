@@ -403,23 +403,6 @@ resumed = sched.tick()
 check("brief pause mid-turn does not cancel",
       (pause, resumed["t"]), ([None] * (IDLE_TICKS_BEFORE_CANCEL - 1), "jog"))
 
-print("\nqueue-and-execute mode")
-
-enc, sched = new_scheduler()
-sched.cancel_on_stop = False
-enc.move(4 * 5)
-first = sched.tick()
-idle = [sched.tick() for _ in range(IDLE_TICKS_BEFORE_CANCEL + 5)]
-check("detents still delivered with cancel disabled", first["det"], 5)
-check("  and stopping emits no cancel", [m for m in idle if m], [])
-check("  so nothing flushes the queued motion", sched.stats["cancels"], 0)
-
-sched.cancel_on_stop = True
-enc.move(4)
-sched.tick()
-resumed = [sched.tick() for _ in range(IDLE_TICKS_BEFORE_CANCEL)]
-check("re-enabling restores cancel on stop", resumed[-1], {"t": "jog_cancel"})
-
 print("\naxis and step")
 
 enc, sched = new_scheduler()

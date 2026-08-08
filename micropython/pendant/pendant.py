@@ -398,7 +398,7 @@ async def refresh_display():
             screen.set_link(pendant_link.connected if pendant_link else False)
             screen.set_state(state["machine_state"])
             screen.set_mode(scheduler.axis, scheduler.step,
-                            scheduler.cancel_on_stop, scheduler.feed)
+                            scheduler.feed)
             if state["dro"]:
                 screen.set_position(state["dro"])
         except Exception as exc:
@@ -418,12 +418,11 @@ async def publish_mode():
     while True:
         if pendant_link is not None and pendant_link.connected:
             current = (scheduler.axis, scheduler.step,
-                       scheduler.cancel_on_stop,
                        pendant_link.stats["sessions"])
             if current != last:
                 last = current
                 pendant_link.send(protocol.mode(
-                    scheduler.axis, scheduler.step, scheduler.cancel_on_stop))
+                    scheduler.axis, scheduler.step))
         await asyncio.sleep_ms(100)
 
 
