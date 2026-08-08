@@ -28,8 +28,12 @@ PENDANT = ROOT / "micropython" / "pendant"
 
 # Modules the pendant imports at runtime. Self-tests and probes are not copied:
 # `mpremote run` streams them from here, so they are always current.
+# Anything a board-side script imports has to be here. `mpremote run` streams
+# the script being run but not its imports, so a module missing from this list
+# fails as "no module named 'pendant'" - the second half of the try/except
+# import - which reads like a packaging problem rather than a missing file.
 MODULES = ["quadrature.py", "protocol.py", "link.py", "jog.py", "buttons.py",
-           "ili9341.py", "screen.py"]
+           "ili9341.py", "st7796.py", "screen.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
 DEFAULT_DEVICE = board.device()

@@ -13,6 +13,7 @@ run` directly. Ctrl-C stops it.
 """
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,6 +25,8 @@ import board  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("script", help="path to the script, relative to the repo")
+    parser.add_argument("--no-sync", action="store_true",
+                        help="skip copying modules to the board first")
     parser.add_argument("--device", default=None,
                         help="override the board (default: PICO_DEVICE, then "
                              "the configured board)")
@@ -35,6 +38,20 @@ def main():
         return 1
 
     device = board.device(args.device)
+
+    # Sync first. `mpremote run` streams the named script but not the modules
+    # it imports, so running a fresh self-test against a board that has not
+    # been synced fails on the import rather than on anything it is testing -
+    # and the message names the package, not the missing file.
+    if not args.no_sync:
+        print("syncing...")
+        sync = Path(__file__).resolve().parent / "sync_board.py"
+        code = subprocess.run(
+            [sys.executable, str(sync), "--device", device]).returncode
+        if code != 0:
+            print("sync failed - not running")
+            return code
+
     print("running {} on {}".format(path, device))
     print("-" * 46)
     # Not captured: these scripts are watched while they run, and buffering
