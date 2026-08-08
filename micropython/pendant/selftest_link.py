@@ -11,7 +11,7 @@ Start the mock sender on the PC first:
 
 Then run this, with the PC's address:
 
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_link.py
+    python tools/on_board.py micropython/pendant/selftest_link.py
 
 Set SENDER_HOST in secrets.py to avoid editing this file.
 """

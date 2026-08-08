@@ -15,7 +15,7 @@ useful before you've decided on credentials.
 
 Run it without installing anything on the board:
 
-    python -m mpremote connect id:7BE7DD09548134C0 run smoke_test.py
+    python tools/on_board.py smoke_test.py
 
 Target the board by ID, not `connect auto` - auto grabs the first USB serial
 device, which can be an attached CNC controller rather than the Pico. Run

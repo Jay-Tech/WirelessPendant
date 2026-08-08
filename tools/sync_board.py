@@ -19,6 +19,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import board  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 PENDANT = ROOT / "micropython" / "pendant"
 
@@ -28,7 +32,7 @@ MODULES = ["quadrature.py", "protocol.py", "link.py", "jog.py", "buttons.py",
            "ili9341.py", "screen.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
-DEFAULT_DEVICE = "id:7BE7DD09548134C0"
+DEFAULT_DEVICE = board.device()
 
 
 def mpremote(device, *args):

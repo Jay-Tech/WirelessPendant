@@ -6,7 +6,7 @@ that one physical click produces exactly one detent.
 
 Wire the divider junctions to GP2 (A) and GP3 (B), then:
 
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/monitor_encoder.py
+    python tools/on_board.py micropython/pendant/monitor_encoder.py
 
 Ctrl-C to stop. What to look for:
 

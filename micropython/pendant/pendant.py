@@ -4,7 +4,7 @@ Wires together the pieces that were built and tested separately - the
 quadrature decoder, the jog scheduler, and the network link - and runs them as
 concurrent tasks.
 
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/pendant.py
+    python tools/on_board.py micropython/pendant/pendant.py
 
 Needs `secrets.py` on the board with WIFI_SSID, WIFI_PASSWORD and SENDER_HOST.
 Start the sender first (tools/mock_sender.py during development), then turn the
@@ -12,7 +12,7 @@ wheel and watch the DRO move.
 
 To run on power-up, copy the modules to the board and this file as main.py:
 
-    python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/pendant/pendant.py :main.py
+    python tools/sync_board.py     # copies micropython/pendant/pendant.py as main.py
 
 No display or buttons are required; both degrade to nothing if absent.
 

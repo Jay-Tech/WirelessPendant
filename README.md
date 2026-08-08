@@ -63,13 +63,19 @@ The `-m` form sidesteps that and works on every platform. See
 > your machine controller trying to get a Python prompt. It happened here: the
 > STM32 board on `0483:5740` got grabbed instead of the Pico and reset.
 >
-> Target the board explicitly by its unique ID instead. This board is
-> `id:7BE7DD09548134C0`, which is what every command below uses, and it stays
-> correct across COM port renumbering:
+> Target the board explicitly by its unique ID instead. The ID is held in one
+> place, [`tools/board.py`](tools/board.py), and every tool resolves through it
+> — so there is no serial number to copy from a docstring and mistype. It stays
+> correct across COM port renumbering.
+>
+> Run it to see what is attached and which device is the target. It labels the
+> controller so it cannot be picked by accident:
 >
 > ```bash
-> python -m mpremote devs
+> python tools/board.py
 > ```
+>
+> Override it without editing anything by setting `PICO_DEVICE`.
 >
 > Pico boards report a `2e8a:` vendor ID (`0005` = MicroPython running,
 > `000f` = RP2350 BOOTSEL). An STM32 grblHAL board reports `0483:5740`. Use
@@ -86,11 +92,11 @@ makes `wifi_join` fail with `no such network in range`. Then copy it to the
 board and run the test:
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/secrets.py :secrets.py
+python tools/sync_board.py
 ```
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 run micropython/smoke_test.py
+python tools/on_board.py micropython/smoke_test.py
 ```
 
 `run` streams the script from your PC rather than installing it, but imports
@@ -98,7 +104,7 @@ still resolve on the board — which is why `secrets.py` has to be copied over
 first. To drop into the REPL instead:
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 repl
+python -m mpremote connect $PICO_DEVICE repl
 ```
 
 To confirm the board is seen at all, and check what it's running:
@@ -185,7 +191,7 @@ Jumper **GP0 to GP1** and the bridge echoes back everything you send, which
 proves the whole path (TCP in → UART out → UART in → TCP out):
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 run micropython/serial_bridge.py
+python tools/on_board.py micropython/serial_bridge.py
 ```
 
 Then from another terminal, connect with any TCP client and type — it comes
@@ -194,13 +200,13 @@ straight back.
 ### Run it
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 run micropython/serial_bridge.py
+python tools/on_board.py micropython/serial_bridge.py
 ```
 
 To start automatically on power-up, copy it as `main.py` instead:
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/serial_bridge.py :main.py
+python tools/sync_board.py
 ```
 
 Then point the sender's TCP adapter at the board's address on port 23. The
@@ -313,7 +319,7 @@ here has A, B, 0V, Vcc, A-, B- and turned out to be **open-collector with an
 internal pull-up**, measured at ~13.3 kΩ. Characterise before wiring:
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/probe_encoder.py
+python tools/on_board.py micropython/pendant/probe_encoder.py
 ```
 
 An open-collector output already has a pull-up forming the top leg of a
@@ -401,7 +407,7 @@ python tools/mock_sender.py --verbose
 Then, with `SENDER_HOST` set in `secrets.py`:
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_link.py
+python tools/on_board.py micropython/pendant/selftest_link.py
 ```
 
 The self-test drives synthetic handwheel motion — an out-and-back sweep on X, a
@@ -465,7 +471,7 @@ The hardware path (pin config, hard IRQ dispatch, speed headroom) needs two
 jumpers, GP16→GP2 and GP17→GP3, which synthesise quadrature and read it back:
 
 ```bash
-python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_quadrature.py
+python tools/on_board.py micropython/pendant/selftest_quadrature.py
 ```
 
 It reports where edges start getting missed. A hand-turned 100 PPR wheel peaks

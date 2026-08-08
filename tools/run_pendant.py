@@ -19,9 +19,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import board  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 ENTRY = ROOT / "micropython" / "pendant" / "pendant.py"
-DEFAULT_DEVICE = "id:7BE7DD09548134C0"
+DEFAULT_DEVICE = board.device()
 
 
 def main():

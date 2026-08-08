@@ -12,7 +12,7 @@ Wiring - two jumper wires on the breadboard:
 
 Run:
 
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_quadrature.py
+    python tools/on_board.py micropython/pendant/selftest_quadrature.py
 
 Without the jumpers it reports "no edges seen" and exits rather than hanging,
 so it is still a safe way to check the module imports and the IRQs register.

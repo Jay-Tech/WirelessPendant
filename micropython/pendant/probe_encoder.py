@@ -17,7 +17,7 @@ directly - that is the thing we are trying to find out about.
 
 Run it, then turn the handwheel steadily for the whole sampling window:
 
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/probe_encoder.py
+    python tools/on_board.py micropython/pendant/probe_encoder.py
 """
 
 import time

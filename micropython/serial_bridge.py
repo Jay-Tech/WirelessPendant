@@ -15,12 +15,12 @@ hold. Nothing here waits for '\\n'.
 
 Deploy:
 
-    python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/secrets.py :secrets.py
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/serial_bridge.py
+    python tools/sync_board.py     # copies micropython/secrets.py as secrets.py
+    python tools/on_board.py micropython/serial_bridge.py
 
 To make it start on power-up, copy it as main.py instead:
 
-    python -m mpremote connect id:7BE7DD09548134C0 fs cp micropython/serial_bridge.py :main.py
+    python tools/sync_board.py     # copies micropython/serial_bridge.py as main.py
 
 Wiring (Pico pin numbers are physical pins, not GPIO numbers):
 

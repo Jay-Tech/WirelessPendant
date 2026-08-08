@@ -9,7 +9,7 @@ fault is distinguishable from a driver fault. What each stage tells you:
 * Picture but no light -> backlight pin.
 * Everything fine but slow -> raise SPI_BAUD.
 
-    python -m mpremote connect id:7BE7DD09548134C0 run micropython/pendant/selftest_display.py
+    python tools/on_board.py micropython/pendant/selftest_display.py
 """
 
 import time
