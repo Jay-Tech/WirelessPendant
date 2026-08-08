@@ -237,6 +237,12 @@ FEED_BUILD_TICKS = 5
 # the fault a 300 ms window produced.
 RATE_WINDOW_TICKS = 8
 
+# Per-tick trace, for catching a stall in the act.
+TRACE_TICKS = 24            # how much history to keep either side
+TRACE_QUIET_TICKS = 100     # minimum gap between dumps, so one stall is one dump
+TRACE_STUMBLE_RATIO = 0.4   # a tick carrying less than this share of the recent
+                            # average, while still turning, is a stumble
+
 
 class JogScheduler:
     """Coalesces encoder detents into paced jog messages.
@@ -272,6 +278,15 @@ class JogScheduler:
         self._ticks_since_motion = 0  # interval used to measure turn rate
         self._moving_ticks = 0        # ticks into the current burst
         self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
+
+        # Rolling per-tick history, dumped when a stumble is detected. A 15 s
+        # summary cannot show what happens in the 300 ms around a stall, and
+        # three separate explanations for these stalls have now failed to
+        # reproduce in simulation - so record the real thing instead of
+        # reasoning about a model of it.
+        self.trace = []
+        self.stumbles = 0
+        self._last_dump = -TRACE_QUIET_TICKS
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
                       "dropped_detents": 0}
 
@@ -498,14 +513,22 @@ class JogScheduler:
             #
             # Emitting exactly the drain also leaves the queue where it is, so
             # the buffer built at the start of the burst stays put.
-            allowed = int((self._cap_feed / 60.0) * (TICK_MS / 1000.0) / self.step)
+            # While building, emit at the untrimmed rate so the queue gains the
+            # difference. After that, emit exactly what the commanded feed
+            # drains, which holds the queue where the build put it.
+            cap = (self._cap_feed if self._moving_ticks <= FEED_BUILD_TICKS
+                   else self.feed)
+            allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)
             if allowed < 1:
                 allowed = 1
 
-            # Hard bound as a backstop, in case the queue has grown anyway.
-            max_queue = (self.feed / 60.0) * (QUEUE_MS / 1000.0)
-            if self._queue_mm >= max_queue:
-                allowed = 1
+            # No bound-based backstop here. One was tried and removed: the bound
+            # follows the feed, so a downward feed step shrank it below a queue
+            # that had been fine a tick earlier, collapsed emission to a single
+            # detent, and starved the planner. On the machine that is smooth
+            # while pinned at a ceiling, then a stumble and a brief stop as the
+            # feed comes off it. Emission already equals the drain, so the queue
+            # cannot run away and nothing needs catching.
             if abs(detents) > allowed:
                 self.stats["dropped_detents"] += abs(detents) - allowed
                 detents = allowed if detents > 0 else -allowed
@@ -513,6 +536,8 @@ class JogScheduler:
 
             self._queue_mm += abs(detents) * self.step
             self.commanded_mm += detents * self.step
+
+            self._record(detents)
 
             self._ticks_since_motion = 0
             self.stats["messages"] += 1
@@ -542,6 +567,32 @@ class JogScheduler:
                 return protocol.jog_cancel()
 
         return None
+
+    def _record(self, detents):
+        """Keep a rolling trace, and flag a tick that carries far less than usual."""
+        carried = abs(detents) * self.step
+        self.trace.append((round(self.feed), abs(detents), carried,
+                           round(self._queue_mm, 1)))
+        if len(self.trace) > TRACE_TICKS:
+            self.trace.pop(0)
+
+        if len(self.trace) < TRACE_TICKS:
+            return
+        recent = [row[2] for row in self.trace[:-1]]
+        average = sum(recent) / len(recent)
+        if average <= 0 or carried >= average * TRACE_STUMBLE_RATIO:
+            return
+
+        self.stats["messages"] += 0          # no-op, keeps the counter honest
+        self.stumbles += 1
+        if self.stats["messages"] - self._last_dump < TRACE_QUIET_TICKS:
+            return
+        self._last_dump = self.stats["messages"]
+        print("[stumble {}] carried {:.2f} mm against an average of {:.2f}".format(
+            self.stumbles, carried, average))
+        print("  feed  det   mm  queue")
+        for feed, det, mm, queue in self.trace:
+            print("  {:>5} {:>4} {:>5.2f} {:>5.1f}".format(feed, det, mm, queue))
 
     async def run(self, link):
         """Drive the scheduler forever, handing messages to the link."""
