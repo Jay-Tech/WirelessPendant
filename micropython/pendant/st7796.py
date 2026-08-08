@@ -29,6 +29,8 @@ except ImportError:
 
 _SWRESET = const(0x01)
 _SLPOUT = const(0x11)
+_INVOFF = const(0x20)
+_INVON = const(0x21)
 _DISPON = const(0x29)
 _MADCTL = const(0x36)
 _PIXFMT = const(0x3A)
@@ -82,6 +84,22 @@ class ST7796S(ILI9341):
 
         self._write(_MADCTL, bytes([madctl]))
         self._write(_PIXFMT, b"\x55")            # 16 bits per pixel, RGB565
+
+        # Inversion ON. Not the same thing as _INVCTR below, and the whole of
+        # the first bring-up failure: the IPS glass on this module drives the
+        # complement of what is written, so without this every colour comes out
+        # as its photographic negative - red rendered cyan, green magenta, blue
+        # brown, and the white edge strip black - while the geometry is
+        # perfectly correct.
+        #
+        # That combination reads like a colour-order fault and is not one. The
+        # BGR bit swaps red and blue; it cannot turn green into magenta, and it
+        # certainly cannot turn white into black. Any two of those four told us
+        # which register it was.
+        #
+        # TN glass on the same controller does not need it, which is why it is
+        # missing from most reference inits.
+        self._write(_INVON)
 
         self._write(_INVCTR, b"\x01")            # 1-dot inversion
         self._write(_DFUNCTR, b"\x80\x02\x3b")
