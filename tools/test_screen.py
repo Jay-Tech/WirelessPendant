@@ -283,6 +283,18 @@ for _name, _field in (("state", tall_screen._state),
     check("  the {} field clears the corner".format(_name),
           _field.x + _field.length * _field.glyphs.width <= PAGE_ZONE_X, True)
 
+# Words are left-aligned, numbers right. A right-aligned "Idle" sits one cell
+# in and "Alarm" flush, so the text jumps sideways as the machine changes
+# state - which is exactly when it is being read, and often not read directly.
+# Numbers keep the opposite: right-aligned they do not shift as they gain a
+# digit.
+check("  the state text is left-aligned", tall_screen._state.align, "left")
+check("  the link text too", tall_screen._link.align, "left")
+check("  while the feed stays right-aligned", tall_screen._mode.align, "right")
+for _axis in AXES:
+    check("    as do the {} digits".format(_axis),
+          tall_screen._positions[_axis].align, "right")
+
 _r, _b = extent(tall)
 check("  and nothing at all is drawn past the panel",
       _r <= 320 and _b <= 480, True)

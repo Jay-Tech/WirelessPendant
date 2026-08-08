@@ -108,7 +108,7 @@ class Field:
     """Fixed-position text, repainting only the characters that changed."""
 
     def __init__(self, display, glyphs, x, y, length,
-                 color=WHITE, background=BLACK):
+                 color=WHITE, background=BLACK, align="right"):
         self.display = display
         self.glyphs = glyphs
         self.x = x
@@ -116,6 +116,12 @@ class Field:
         self.length = length
         self.color = color
         self.background = background
+        # Right by default, because most fields here hold numbers and a number
+        # that shifts sideways as it gains a digit is hard to read at a glance.
+        # Words want the opposite: left-aligned they start in the same place
+        # whatever their length, which is what makes a changing machine state
+        # readable without looking directly at it.
+        self.align = align
         self._shown = " " * length
 
     def set(self, text, color=None):
@@ -124,7 +130,10 @@ class Field:
             self.color = color
             self._shown = "\x00" * self.length
 
-        text = "{:>{}}".format(text, self.length)[:self.length]
+        if self.align == "left":
+            text = "{:<{}}".format(text, self.length)[:self.length]
+        else:
+            text = "{:>{}}".format(text, self.length)[:self.length]
         width = self.glyphs.width
         for index in range(self.length):
             char = text[index]
@@ -266,9 +275,9 @@ class DroScreen:
         # driver clamps rather than complains, so the last character was quietly
         # losing its right half.
         self._state = Field(self.display, status, 8, state_y,
-                            STATE_CELLS, color=GREEN)
+                            STATE_CELLS, color=GREEN, align="left")
         self._link = Field(self.display, status, 8, link_y, LINK_CELLS,
-                           color=AMBER)
+                           color=AMBER, align="left")
 
         # Feed shares the state row, right of the state text and left of the
         # corner, right-aligned so the digits do not shuffle as it changes.
