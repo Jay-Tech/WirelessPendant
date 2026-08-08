@@ -61,6 +61,12 @@ BLUE = color565(60, 140, 255)
 
 
 class ILI9341:
+    # Looked up through the instance so a panel with the same command set but a
+    # different geometry can substitute its own. The MADCTL values are shared -
+    # those bits mean the same thing on any MIPI DCS part - and only the
+    # dimensions change.
+    ROTATIONS = _ROTATIONS
+
     def __init__(self, spi, cs, dc, rst=None, backlight=None, rotation=90):
         self._spi = spi
         self._cs = Pin(cs, Pin.OUT, value=1)
@@ -69,7 +75,7 @@ class ILI9341:
         self._backlight = (Pin(backlight, Pin.OUT, value=1)
                            if backlight is not None else None)
 
-        madctl, self.width, self.height = _ROTATIONS[rotation]
+        madctl, self.width, self.height = self.ROTATIONS[rotation]
 
         # One reusable scratch row keeps fills from allocating per call, which
         # matters when the DRO is redrawing on every status frame.
