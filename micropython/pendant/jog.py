@@ -32,11 +32,16 @@ COUNTS_PER_DETENT = 4
 
 # Millimetres per detent.
 #
-# 5 mm is suspended for now. Feed has to be at least rate x step x 60 to avoid
-# lagging, so a coarse step saturates the machine's ceiling at a very low turn
-# rate - 5 mm reaches 5000 mm/min at 17 detents/s, which is barely turning, and
-# everything above that just pins at maximum with no proportional feel left.
-STEP_SIZES = (0.001, 0.01, 0.1, 1.0)
+# The right traverse step is the one where a natural turning speed lands on the
+# machine's maximum feed: step = feed_max / (60 x detents_per_second). At around
+# 300 detents/s that is roughly 0.28 mm, which is why 1 mm felt dead - it asks
+# for ~18000 mm/min, the machine delivers 5000, and the rest is dropped. 0.5 mm
+# fills that gap.
+#
+# 5 mm is suspended for the same reason taken further: it reaches 5000 mm/min at
+# 17 detents/s, barely turning, and everything above pins at maximum with no
+# proportional feel left.
+STEP_SIZES = (0.001, 0.01, 0.1, 0.5, 1.0)
 DEFAULT_STEP_INDEX = 2
 
 # Silence that counts as "the operator stopped" rather than "turning slowly".
@@ -84,12 +89,20 @@ FEED_TRACKING_ENABLED = True
 FEED_MIN_MM_MIN = 50.0
 FEED_MAX_MM_MIN = 5000.0
 
+# Smoothing applied to the feed, as an exponential moving average.
+#
+# Interval measurement reacts within a single detent, which is what fixed the
+# wind-down stutter, but hand turning is irregular detent to detent so the raw
+# figure jumps around and the motion feels rough. This damps a one-tick spike
+# while still following a real change within a few ticks - roughly 50 ms at 0.4.
+FEED_SMOOTHING = 0.4
+
 # Ceiling per step size, matching STEP_SIZES.
 #
 # A fine step is for placing the tool, not covering ground, so letting it reach
 # the machine's full rate just makes it twitchy to control. Each step gets a
 # ceiling suited to what it is for; the coarse step keeps the full range.
-STEP_MAX_FEED = (300.0, 800.0, 2000.0, 5000.0)
+STEP_MAX_FEED = (300.0, 800.0, 2000.0, 4000.0, 5000.0)
 
 # Millimetres of motion allowed to be in flight at once.
 #
@@ -245,12 +258,19 @@ class JogScheduler:
         # consecutive jogs blend into continuous motion. terjeio's MPG firmware
         # does the same thing - feed straight from encoder velocity, with no
         # curve above it.
-        feed = self.turn_rate(detents) * self.step * 60.0
+        target = self.turn_rate(detents) * self.step * 60.0
         ceiling = STEP_MAX_FEED[self.step_index]
+        if target > ceiling:
+            target = ceiling
+        elif target < FEED_MIN_MM_MIN:
+            target = FEED_MIN_MM_MIN
+
+        # Smooth towards the target rather than jumping to it.
+        feed = self.feed + FEED_SMOOTHING * (target - self.feed)
         if feed < FEED_MIN_MM_MIN:
-            return FEED_MIN_MM_MIN
-        if feed > ceiling:
-            return ceiling
+            feed = FEED_MIN_MM_MIN
+        elif feed > ceiling:
+            feed = ceiling
         return feed
 
     def tick(self):
@@ -318,6 +338,13 @@ class JogScheduler:
             self.stats["messages"] += 1
             self.stats["detents"] += abs(detents)
             return protocol.jog(self.axis, detents, self.step, self.feed)
+
+        if self._moving or self.feed > FEED_MIN_MM_MIN:
+            # Let the smoothed feed fall while the wheel is still, or the first
+            # detent after a pause would inherit the speed of the last burst.
+            self.feed += FEED_SMOOTHING * (FEED_MIN_MM_MIN - self.feed)
+            if self.feed < FEED_MIN_MM_MIN:
+                self.feed = FEED_MIN_MM_MIN
 
         if self._moving:
             if not self.cancel_on_stop:

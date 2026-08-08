@@ -16,6 +16,11 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          MAX_QUEUE_MM, STEP_MAX_FEED)
 
+# Index by value, so adding a step to the ladder cannot silently retarget a
+# test at a different step size.
+COARSE = STEP_SIZES.index(1.0)
+FINE = STEP_SIZES.index(0.01)
+
 failures = []
 
 
@@ -125,7 +130,7 @@ check("distance per detent is identical at every turn speed",
 # Feed must never fall below the rate being commanded, or the shortfall queues
 # every tick and runs on after the wheel stops.
 enc, sched = new_scheduler()
-sched.set_step_index(3)                  # 1.0 mm per detent
+sched.set_step_index(COARSE)             # 1.0 mm per detent
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4)                          # 1 detent per 20 ms = 50 detents/s
     tracked = sched.tick()
@@ -149,11 +154,12 @@ check("  so each move spans roughly a whole tick",
 # Capped, because asking for more than the machine can deliver only rebuilds
 # the queue this design exists to keep shallow.
 enc, sched = new_scheduler()
-sched.set_step_index(3)
+sched.set_step_index(COARSE)
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 1 mm
     capped = sched.tick()
-check("feed is capped at the step's ceiling", capped["feed"], STEP_MAX_FEED[3])
+check("feed is capped at the step's ceiling",
+      capped["feed"], STEP_MAX_FEED[COARSE])
 
 # Out-turning the machine must drop the surplus, not bank it. Banking is what
 # made run-on grow the longer the pendant was used: every back-and-forth added
