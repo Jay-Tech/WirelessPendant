@@ -114,15 +114,20 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 # nothing at all - free at the maximum, reported feed at zero, for around
 # 150 ms at a time. That is a dead stop mid-traverse, and it is the jerk.
 #
-# Four blocks is 200 ms at a 50 ms tick, against a longest observed stall of
-# 150 ms. Six was tried first and held the feed perfectly, but the machine ran
-# 98 mm behind the hand and peaked at 129 mm, which is about a second of
-# coasting after the wheel stops - more overrun than is wanted at 0.5 mm.
+# Six blocks is 300 ms at a 50 ms tick, against a longest observed stall of
+# 150 ms.
 #
-# Depth is the only dial for that. The prompt cancel that would bound run-off
-# independently cannot be built: a pause to reposition the hand and a genuine
-# stop are the same length, so any threshold short enough to stop the axis
-# promptly also chops a re-grip in half.
+# Four was tried, to cut run-off. It did - but it also made 0.1 mm noticeably
+# rougher, because that is where the planner is already starved: the feed
+# matches the hand, so there is no surplus distance to bank and depth sits at
+# one or two blocks whatever the target. Lowering the target there removes the
+# only pressure filling it at all.
+#
+# Serving both from this one number is what forced the trade. Depth costs
+# run-off in proportion to block length, so the same six blocks is 12 mm at
+# 0.1 mm and 45 mm at 0.5 mm - fine at one step and too much at the other.
+# RUNAHEAD_LIMIT_S bounds the run-off directly instead, which frees this to be
+# set for smoothness alone.
 #
 # It happened because emission was capped at exactly what the commanded feed
 # drains in a tick. Sending precisely what the machine consumes means depth can
@@ -134,7 +139,7 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 #
 # So run ahead of the drain until the controller holds a real cushion, then
 # match the drain to hold it there. Depth is measured, not assumed.
-PLANNER_TARGET_BLOCKS = 4
+PLANNER_TARGET_BLOCKS = 6
 
 # Ceiling on how far above the drain rate to emit, reached only when the
 # planner is completely empty. Two means the buffer gains a tick of work per
@@ -152,6 +157,22 @@ PLANNER_TARGET_BLOCKS = 4
 # Scaling by the shortfall makes the correction fade out as the buffer fills,
 # so block length converges instead of oscillating.
 PLANNER_FILL_RATIO = 2.0
+
+# Hard bound on how far behind the hand the machine may run, in seconds.
+#
+# Depth alone is not a sufficient bound. At 0.5 mm the planner never reaches
+# target - the feed matches the hand, so distance sent per tick equals distance
+# drained per tick and there is no surplus to bank - and the fill correction
+# then runs continuously. The excess does not become depth; it becomes lag. The
+# machine measured 67 mm behind steady and 96 mm at peak, which is the run-off
+# felt on stopping.
+#
+# Expressed in time rather than millimetres because that is what it costs to
+# stop: run-off is the buffer emptying at the commanded feed, so a quarter
+# second is a quarter second whether that is 37 mm at F9000 or 10 mm at F2400.
+# Below this bound the depth regulator does as it likes; above it, emission
+# drops to the drain rate no matter how shallow the planner is.
+RUNAHEAD_LIMIT_S = 0.25
 
 # --- turn rate drives feed, not distance ----------------------------------
 #
@@ -358,6 +379,7 @@ class JogScheduler:
         self.actual_feed = 0          # what the controller reports, pushed in
         self.planner_free = 0         # controller's free planner slots, ditto
         self.planner_capacity = 0     # largest free count seen = empty planner
+        self.lag_mm = 0.0             # measured, pushed in from the status feed
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -678,7 +700,11 @@ class JogScheduler:
             # buffer-state bit off still jogs.
             if self.planner_free > self.planner_capacity:
                 self.planner_capacity = self.planner_free
-            if self.planner_capacity:
+            # Run-ahead is bounded before depth is even consulted. Filling is
+            # what puts the machine behind the hand, so once it is far enough
+            # behind there is nothing a shallow planner can justify.
+            runahead_mm = (self.feed / 60.0) * RUNAHEAD_LIMIT_S
+            if self.planner_capacity and self.lag_mm <= runahead_mm:
                 held = self.planner_capacity - self.planner_free
                 shortfall = PLANNER_TARGET_BLOCKS - held
                 if shortfall <= 0:
@@ -688,6 +714,8 @@ class JogScheduler:
                         shortfall = PLANNER_TARGET_BLOCKS
                     cap = self.feed * (1.0 + (PLANNER_FILL_RATIO - 1.0)
                                        * shortfall / PLANNER_TARGET_BLOCKS)
+            elif self.planner_capacity:
+                cap = self.feed
             else:
                 cap = self._cap_feed if self._building else self.feed
             allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)

@@ -183,6 +183,11 @@ def update_lag(wpos):
     _, start_pos, start_cmd = reference
     lag = abs((scheduler.commanded_mm - start_cmd) - (wpos[index] - start_pos))
     state["lag_mm"] = lag
+    # The scheduler bounds its own run-ahead against this. It is the only
+    # closed-loop figure available for how far the machine is behind the hand:
+    # planner depth says how much work is queued but not how much distance, and
+    # at a coarse step those differ by an order of magnitude.
+    scheduler.lag_mm = lag
     if lag > state["peak_lag_mm"]:
         state["peak_lag_mm"] = lag
 

@@ -17,7 +17,8 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          BUFFER_TICKS, BUFFER_HYSTERESIS,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND, FEED_BUILD_TRIM,
-                         PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO)
+                         PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
+                         RUNAHEAD_LIMIT_S)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -510,7 +511,8 @@ print("\nplanner depth regulation")
 # what stops a transport hiccup from emptying the buffer and stalling the axis.
 CAPACITY = 128
 
-def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE):
+def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE,
+                 lag_mm=0.0):
     """Drive a steady turn while the controller reports a fixed depth."""
     enc, sched = new_scheduler()
     for _ in range(step_index):
@@ -519,6 +521,7 @@ def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE):
     sched.planner_free = free
     sent = 0
     for _ in range(ticks):
+        sched.lag_mm = lag_mm
         enc.move(4 * detents_per_tick)
         message = motion(sched.tick())
         if message:
@@ -539,6 +542,16 @@ check("an empty planner is fed faster than it drains", sent_starved > sent_suppl
 ratio = sent_starved / max(sent_supplied, 1)
 check("  and a supplied one is fed at the drain rate",
       PLANNER_FILL_RATIO * 0.85 < ratio < PLANNER_FILL_RATIO * 1.25, True)
+
+# Run-ahead is bounded independently of depth. Without this the fill runs
+# whenever the planner is shallow, and at a coarse step the planner is
+# permanently shallow - so it never stops, and the surplus becomes lag rather
+# than depth. The machine measured 96 mm behind the hand before this bound.
+starved_far_behind, sent_far = run_at_depth(CAPACITY, lag_mm=10000.0)
+check("run-ahead past the limit stops the fill",
+      sent_far <= sent_supplied, True)
+check("  and the limit scales with feed, not distance",
+      RUNAHEAD_LIMIT_S > 0, True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.
