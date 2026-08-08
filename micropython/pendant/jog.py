@@ -271,6 +271,7 @@ class JogScheduler:
         self._queue_mm = 0.0          # estimate of motion in flight
         self._ticks_since_motion = 0  # interval used to measure turn rate
         self._moving_ticks = 0        # ticks into the current burst
+        self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
                       "dropped_detents": 0}
 
@@ -395,9 +396,6 @@ class JogScheduler:
         # curve above it.
         target = self.turn_rate(detents) * self.step * 60.0
 
-        if self._moving_ticks < FEED_BUILD_TICKS:
-            target *= FEED_BUILD_TRIM
-
         ceiling = STEP_MAX_FEED[self.step_index]
         axis_ceiling = AXIS_MAX_FEED.get(self.axis, FEED_MAX_MM_MIN)
         if axis_ceiling < ceiling:
@@ -406,6 +404,21 @@ class JogScheduler:
             target = ceiling
         elif target < FEED_MIN_MM_MIN:
             target = FEED_MIN_MM_MIN
+
+        # What the machine drains at the untrimmed rate, kept for the emission
+        # cap. The cap must not use the trimmed value: emitting exactly what a
+        # reduced feed drains means nothing accumulates, so the buffer the trim
+        # exists to build never appears and the trim just discards motion.
+        self._cap_feed = target
+
+        # Under-feed briefly at the start of a burst so the queue gains the
+        # difference. Emission stays at the full rate, so what is commanded and
+        # what is executed differ by exactly the trim - and that difference is
+        # the buffer.
+        if self._moving_ticks < FEED_BUILD_TICKS:
+            target *= FEED_BUILD_TRIM
+            if target < FEED_MIN_MM_MIN:
+                target = FEED_MIN_MM_MIN
 
         # Smooth towards the target rather than jumping to it - but only while
         # already moving. Starting from rest, smoothing would ramp up from the
@@ -471,16 +484,27 @@ class JogScheduler:
             self._moving = True
             self._moving_ticks += 1
 
-            # Refuse to put more in flight than MAX_QUEUE_MM. The surplus is
-            # dropped rather than carried in the residual, which would only
-            # defer the same overshoot to the next tick.
-            max_queue = (self.feed / 60.0) * (QUEUE_MS / 1000.0)
-            room = max_queue - self._queue_mm
-            allowed = int(room / self.step)
+            # Cap what goes out at what the machine drains in a tick, which is
+            # steady while the feed is steady.
+            #
+            # Capping against remaining queue room instead - the obvious
+            # reading of "do not exceed the bound" - makes the cap swing every
+            # tick, because room does. Each message then carries a different
+            # distance despite a constant feed, so every move takes a different
+            # time to execute and the planner keeps running short. That is felt
+            # as roughness, and it scales with how much is being discarded:
+            # barely visible at 0.1 mm where 10% is dropped, constant at 1.0 mm
+            # where half is.
+            #
+            # Emitting exactly the drain also leaves the queue where it is, so
+            # the buffer built at the start of the burst stays put.
+            allowed = int((self._cap_feed / 60.0) * (TICK_MS / 1000.0) / self.step)
             if allowed < 1:
-                # Always let one detent through, or a full queue would stop
-                # motion entirely. The drain still exceeds this, so the queue
-                # continues to empty.
+                allowed = 1
+
+            # Hard bound as a backstop, in case the queue has grown anyway.
+            max_queue = (self.feed / 60.0) * (QUEUE_MS / 1000.0)
+            if self._queue_mm >= max_queue:
                 allowed = 1
             if abs(detents) > allowed:
                 self.stats["dropped_detents"] += abs(detents) - allowed
