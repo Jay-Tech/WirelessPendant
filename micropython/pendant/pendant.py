@@ -258,11 +258,18 @@ async def report():
         position = "  ".join(
             "{}{:+8.3f}".format(a, v)
             for a, v in zip(("X", "Y", "Z"), dro)) if dro else "no status yet"
-        link.log("{} | axis {} step {} | {} | jogs={} detents={} err={}".format(
-            "up" if pendant_link.connected else "DOWN",
-            scheduler.axis, scheduler.step, position,
-            scheduler.stats["messages"], scheduler.stats["detents"],
-            encoder.errors))
+        # Dropped detents are reported because the effect is otherwise
+        # invisible: at a coarse step the wheel simply feels unresponsive, with
+        # nothing to say the motion was discarded rather than never commanded.
+        sent = scheduler.stats["detents"]
+        dropped = scheduler.stats["dropped_detents"]
+        kept = 100 * sent // (sent + dropped) if (sent + dropped) else 100
+        link.log(
+            "{} | axis {} step {} F{:.0f} | {} | detents={} dropped={} ({}% kept)"
+            " err={}".format(
+                "up" if pendant_link.connected else "DOWN",
+                scheduler.axis, scheduler.step, scheduler.feed, position,
+                sent, dropped, kept, encoder.errors))
 
 
 async def main():
