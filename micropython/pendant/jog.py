@@ -202,7 +202,25 @@ STEP_MAX_FEED = (150.0, 250.0, 2500.0, 9000.0, 12000.0)
 # tick and what drains are nearly equal, so a tight bound tips in and out of
 # dropping on small variations and the resulting irregular distances are felt as
 # roughness of their own.
-QUEUE_MS = 200.0
+QUEUE_MS = 300.0
+
+# Feed applied while a burst of motion establishes its buffer, and how long for.
+#
+# Commanding exactly the arrival rate holds the queue wherever it already is -
+# and out of rest that is zero, so the planner has nothing in hand and runs dry
+# on any tick that arrives light. The machine shows this as random jerks and
+# occasional dead stops, and as motion that is smooth only when a ceiling
+# happens to be binding, because a bound ceiling is what fills the queue.
+#
+# So under-feed briefly at the start of a burst to put something in the buffer,
+# then track exactly. Since arrival and drain match after that, what was built
+# stays built - no permanent loss, unlike trimming continuously.
+#
+# Timed rather than measured: the queue is read after the tick's drain, so it
+# always presents at its trough and a measurement-driven version could never
+# tell a filling buffer from a full one.
+FEED_BUILD_TRIM = 0.80
+FEED_BUILD_TICKS = 5
 
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
@@ -252,6 +270,7 @@ class JogScheduler:
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self._queue_mm = 0.0          # estimate of motion in flight
         self._ticks_since_motion = 0  # interval used to measure turn rate
+        self._moving_ticks = 0        # ticks into the current burst
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
                       "dropped_detents": 0}
 
@@ -349,7 +368,8 @@ class JogScheduler:
         if not self.feed_tracking:
             return FEED_MAX_MM_MIN
 
-        # Exactly the rate being commanded - no more.
+        # Exactly the rate being commanded - no more, except briefly at the
+        # start of a burst while the planner's buffer is established.
         #
         # A trim below the arrival rate while a buffer filled was tried and
         # removed. It could not tell a filling buffer from a full one, because
@@ -374,6 +394,9 @@ class JogScheduler:
         # does the same thing - feed straight from encoder velocity, with no
         # curve above it.
         target = self.turn_rate(detents) * self.step * 60.0
+
+        if self._moving_ticks < FEED_BUILD_TICKS:
+            target *= FEED_BUILD_TRIM
 
         ceiling = STEP_MAX_FEED[self.step_index]
         axis_ceiling = AXIS_MAX_FEED.get(self.axis, FEED_MAX_MM_MIN)
@@ -446,6 +469,7 @@ class JogScheduler:
             # that also discarded most of the opening detents.
             self.feed = self.feed_rate(detents)
             self._moving = True
+            self._moving_ticks += 1
 
             # Refuse to put more in flight than MAX_QUEUE_MM. The surplus is
             # dropped rather than carried in the residual, which would only
@@ -489,6 +513,7 @@ class JogScheduler:
             if self._idle_ticks >= IDLE_TICKS_BEFORE_CANCEL:
                 self._moving = False
                 self._idle_ticks = 0
+                self._moving_ticks = 0
                 self.stats["cancels"] += 1
                 return protocol.jog_cancel()
 
