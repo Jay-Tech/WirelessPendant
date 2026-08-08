@@ -228,8 +228,15 @@ class PendantLink:
             await asyncio.sleep_ms(500)
             idle_ms = time.ticks_diff(time.ticks_ms(), self._last_rx)
             if idle_ms > RX_TIMEOUT_S * 1000:
-                log("no traffic for {}s - assuming link is dead".format(
-                    RX_TIMEOUT_S))
+                # Counts included because the message alone cannot say whether
+                # the far end went quiet or this end stopped reading. A session
+                # that carried thousands of messages and then stopped is a
+                # different fault from one that never carried any, and the
+                # pendant's own watchdog says which side stalled.
+                log("no traffic for {}s - assuming link is dead"
+                    " (sent={} received={} queued={})".format(
+                        RX_TIMEOUT_S, self.stats["sent"],
+                        self.stats["received"], len(self._queue)))
                 self._alive = False
 
     async def _session(self):

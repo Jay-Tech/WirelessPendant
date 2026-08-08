@@ -88,6 +88,13 @@ TOUCH_I2C_ID = 1
 # hundred microseconds against the SPI the panel is already doing.
 TOUCH_POLL_MS = 30
 
+# How often the watchdog checks that the loop is still turning, and how late a
+# wake-up has to be before it is worth reporting. 100 ms is five scheduler
+# ticks - long enough that a busy tick does not trip it, short enough to catch
+# a stall well before the link's 10 s deadline gives up.
+WATCHDOG_MS = 100
+STALL_WARN_MS = 100
+
 # Which panel is fitted. "st7796" is the MSP3525/MSP3526 3.5" 320x480 IPS;
 # "ili9341" is the 2.4" 320x240 it replaced, kept because it is the fallback
 # if the new one is ever out of the loop.
@@ -123,7 +130,8 @@ state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
-         "planner_min": 999, "planner_max": 0, "bf_warned": False}
+         "planner_min": 999, "planner_max": 0, "bf_warned": False,
+         "stalls": 0, "worst_stall_ms": 0}
 
 
 def on_message(message):
@@ -451,6 +459,34 @@ async def status_led():
             await asyncio.sleep_ms(200)
 
 
+async def watchdog():
+    """Measure the event loop's own scheduling latency.
+
+    A blocked loop and a silent sender are indistinguishable from the link's
+    point of view: both end as "no traffic for 10s", because the deadline task
+    cannot run while the loop is blocked and fires the moment it resumes. This
+    tells them apart by asking a task that does nothing how late it was woken.
+
+    The likeliest way to block this loop is printing. Every trace dump is 25
+    lines over USB CDC, and if the host is not draining that as fast as it
+    arrives, print() blocks - taking the socket read down with it. A pendant
+    that disconnects because it was too busy describing itself is worth being
+    able to prove rather than suspect.
+    """
+    last = time.ticks_ms()
+    while True:
+        await asyncio.sleep_ms(WATCHDOG_MS)
+        now = time.ticks_ms()
+        late = time.ticks_diff(now, last) - WATCHDOG_MS
+        last = now
+        if late > STALL_WARN_MS:
+            state["stalls"] += 1
+            if late > state["worst_stall_ms"]:
+                state["worst_stall_ms"] = late
+            link.log("loop stalled {} ms - nothing ran, including the link"
+                     .format(late))
+
+
 async def report():
     """Periodic one-liner, so a headless pendant is not silent."""
     while True:
@@ -465,14 +501,21 @@ async def report():
         sent = scheduler.stats["detents"]
         dropped = scheduler.stats["dropped_detents"]
         kept = 100 * sent // (sent + dropped) if (sent + dropped) else 100
+        # Sessions and stalls ride along because a reconnect is otherwise only
+        # visible as two lines that scrolled past minutes ago, and the question
+        # after one is always whether the link dropped or the loop stopped
+        # servicing it.
         link.log(
             "{} | axis {} step {} F{:.0f}/act{} collapse={} | {} | detents={}"
-            " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm err={}".format(
+            " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm err={}"
+            " sess={} stall={}/{}ms".format(
                 "up" if pendant_link.connected else "DOWN",
                 scheduler.axis, scheduler.step, scheduler.feed,
                 state["actual_feed"], state["feed_collapses"], position,
                 sent, dropped, kept,
-                state["lag_mm"], state["peak_lag_mm"], encoder.errors))
+                state["lag_mm"], state["peak_lag_mm"], encoder.errors,
+                pendant_link.stats["sessions"], state["stalls"],
+                state["worst_stall_ms"]))
 
 
 async def main():
@@ -514,6 +557,7 @@ async def main():
         publish_mode(),
         refresh_display(),
         watch_touch(),
+        watchdog(),
         status_led(),
         report(),
     )
