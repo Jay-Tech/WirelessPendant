@@ -365,6 +365,12 @@ async def watch_touch():
                     elif kind == "step":
                         scheduler.set_step(value)
                         link.log("step -> {} mm".format(value))
+                    elif kind == "page":
+                        # Reserved, not yet wired. Logged rather than ignored
+                        # so the target is demonstrably live - a corner that
+                        # silently does nothing is indistinguishable from one
+                        # whose hit box is in the wrong place.
+                        link.log("page tapped - nothing bound to it yet")
         except Exception as exc:
             # A touch fault must not take the pendant down. The wheel and the
             # link are the parts that matter; selection is a convenience.

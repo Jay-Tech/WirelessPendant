@@ -67,6 +67,20 @@ TOP_MARGIN = 20
 # is used without looking. Three across is 16.5 mm.
 STEP_ROWS = ((0.001, 0.01, 0.1), (0.5, 1.0))
 
+# The bottom-right corner, reserved for paging. 112 x 68 is 17 x 10.5 mm on
+# this panel, so it clears a fingertip in both directions - a corner target is
+# reached with a thumb while the pendant is held, which is the least accurate
+# way anything here gets pressed.
+PAGE_ZONE_X = 240
+PAGE_ZONE_H = 68
+
+# Cells for the state text and the feed, sized to what they actually hold.
+# "Alarm" and "Check" are the longest states; "F15000" the longest feed. Both
+# have to fit left of the corner without meeting each other, and 320 px less
+# the corner leaves 232 for the pair.
+STATE_CELLS = 7
+FEED_CELLS = 6
+
 ZONE_ROW_H = 80
 ZONE_GAP = 8
 ZONE_MARGIN = 16
@@ -144,12 +158,19 @@ class DroScreen:
         """
         self.display.fill(BLACK)
 
-        # Status lines are anchored to the bottom and the position rows to the
-        # top, so a taller panel gives its extra height to the middle rather
-        # than stranding the status off the bottom edge.
+        # Two status lines, not three, and a corner left free.
+        #
+        # The third used to carry axis, step and HALT/QUEUE. Axis and step are
+        # now shown by which row and which cell is outlined, so repeating them
+        # in text said nothing the screen was not already saying; HALT/QUEUE
+        # showed a word that has not changed since the jog tuning settled.
+        # What is left is the feed, which is the one thing that varies with how
+        # the wheel is turned and has no other indicator.
+        #
+        # Anchored to the bottom, so a taller panel gives its extra height to
+        # the middle rather than stranding the status off the edge.
         link_y = self.display.height - 22
-        mode_y = link_y - STATUS_PITCH
-        state_y = mode_y - STATUS_PITCH
+        state_y = link_y - STATUS_PITCH
 
         # A tall panel earns a step grid; a short one gives its height to the
         # position rows and keeps the physical step buttons.
@@ -199,13 +220,34 @@ class DroScreen:
         # Indented by 8 like the others it ran 8 px past the right edge, and the
         # driver clamps rather than complains, so the last character was quietly
         # losing its right half.
-        cells = self.display.width // self._small.width
-        self._state = Field(self.display, self._small, 8, state_y, 10,
-                            color=GREEN)
-        self._mode = Field(self.display, self._small, 0, mode_y, cells,
-                           color=WHITE)
-        self._link = Field(self.display, self._small, 8, link_y, 14,
+        self._state = Field(self.display, self._small, 8, state_y,
+                            STATE_CELLS, color=GREEN)
+        self._link = Field(self.display, self._small, 8, link_y, 9,
                            color=AMBER)
+
+        # Feed sits on the state row, right of the state text and left of the
+        # corner. Right-aligned so the digits do not shuffle as it changes.
+        feed_w = FEED_CELLS * self._small.width
+        self._mode = Field(self.display, self._small,
+                           PAGE_ZONE_X - feed_w - 8, state_y, FEED_CELLS,
+                           color=WHITE)
+
+        # The corner. Registered whether or not anything acts on it yet, so the
+        # geometry is settled and reserved rather than being retrofitted around
+        # whatever lands here later.
+        if self._zones_shown:
+            page_y = self.display.height - PAGE_ZONE_H - 8
+            page_box = (PAGE_ZONE_X, page_y,
+                        self.display.width - PAGE_ZONE_X, PAGE_ZONE_H)
+            self._draw_border(page_box, False)
+            self.zones.add("page", page_box[0], page_box[1],
+                           page_box[2], page_box[3], "next")
+            label = "PAGE"
+            text_x = page_box[0] + (page_box[2]
+                                    - len(label) * self._small.width) // 2
+            text_y = page_y + (PAGE_ZONE_H - self._small.height) // 2
+            Field(self.display, self._small, text_x, text_y,
+                  len(label), color=GREY).set(label)
 
         self._last_position = {}
         self.set_position((0.0, 0.0, 0.0))
@@ -283,22 +325,14 @@ class DroScreen:
         self._state.set(state, STATE_COLORS.get(state, WHITE))
 
     def set_mode(self, axis, step, halt_on_stop=True, feed=0.0):
-        # HALT: stopping the wheel flushes queued motion. QUEUE: every detent
-        # is honoured and the machine finishes what it was given. Shown because
-        # the two feel different enough that guessing which is active while
-        # standing at the machine is worse than the space it costs.
+        # Feed only. Distance per detent never changes, so a rising number
+        # here is the only visible sign that winding faster is doing anything -
+        # whereas axis and step are already shown by which row and which cell
+        # is outlined.
         #
-        # Feed is shown because it is the thing that varies with how you turn:
-        # distance per detent never changes, so a rising number here is the only
-        # visible sign that winding faster is doing anything.
-        # No "mm" suffix. The step is always millimetres, and the longest
-        # string this can produce - "X 0.001 QUEUE F15000" - is exactly the 20
-        # cells a 320 px panel has. With the suffix it was 22, and Field
-        # truncates from the right after aligning, so the feed lost its last
-        # two digits: F15000 displayed as F150. A readout that silently shows a
-        # different number to the one commanded is worse than a missing unit.
-        self._mode.set("{} {} {} F{:.0f}".format(
-            axis, step, "HALT" if halt_on_stop else "QUEUE", feed))
+        # Eight cells holds "F15000" with room to spare, where the old combined
+        # line needed 22 and had 20, and quietly truncated F15000 to F150.
+        self._mode.set("F{:.0f}".format(feed))
         self.set_step_highlight(step)
         # Highlight the selected axis label so the operator can see what the
         # wheel will move without reading the smaller mode line.

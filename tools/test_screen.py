@@ -42,7 +42,7 @@ sys.modules.setdefault("ili9341", _ili9341)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
 from pendant.screen import (DroScreen, AXES, STATUS_PITCH,  # noqa: E402
-                            ROW_PITCH, STEP_ROWS)
+                            ROW_PITCH, STEP_ROWS, PAGE_ZONE_X)
 from pendant.jog import STEP_SIZES  # noqa: E402
 from pendant.screen import Zones  # noqa: E402
 
@@ -92,13 +92,13 @@ print("layout on the fitted 320x240 panel")
 display = FakeDisplay(320, 240)
 screen = DroScreen(display)
 
-# Coordinates the hardware was tuned against. The status block used to be at
-# fixed y of 170/194/218; it is now anchored to the bottom edge, and on this
-# panel that has to come out at exactly the same place or the change was not
-# a refactor.
-check("state line sits where it always did", screen._state.y, 170)
-check("  mode line too", screen._mode.y, 194)
-check("  and the link line", screen._link.y, 218)
+# Two status rows now, not three. Axis, step and HALT/QUEUE left the third:
+# the first two are shown by which row and cell is outlined, and the last has
+# not changed since the jog tuning settled.
+check("the link line stays anchored to the bottom", screen._link.y, 218)
+check("  with the state line one pitch above", screen._state.y,
+      218 - STATUS_PITCH)
+check("  and the feed sharing the state row", screen._mode.y, screen._state.y)
 check("position rows unchanged",
       [screen._positions[a].y for a in AXES], [20, 66, 112])
 
@@ -110,11 +110,20 @@ check("  or past the bottom", bottom <= 240, True)
 # longest string it can produce does not merely look cramped - Field aligns
 # then truncates from the right, so F15000 rendered as F150. The panel showing
 # a different number to the one being sent is the failure worth a test.
-worst = "{} {} {} F{:.0f}".format("X", 0.001, "QUEUE", 15000)
-check("the widest mode line fits without truncation",
+worst = "F{:.0f}".format(15000)
+check("the widest feed fits without truncation",
       len(worst) <= screen._mode.length, True)
 check("  and without running off the panel",
       screen._mode.x + screen._mode.length * 16 <= 320, True)
+
+# The status row has three things competing for one line. Any two meeting is
+# a silent clip, the driver clamping rather than raising.
+check("  the state text clears the feed",
+      screen._state.x + screen._state.length * 16 <= screen._mode.x, True)
+check("  and the feed clears the corner",
+      screen._mode.x + screen._mode.length * 16 <= PAGE_ZONE_X, True)
+check("  and the link line clears it too",
+      screen._link.x + screen._link.length * 16 <= PAGE_ZONE_X, True)
 
 print("\na taller panel")
 
@@ -179,6 +188,18 @@ for index, axis in enumerate(AXES):
     check("  tapping the {} row selects it".format(axis),
           tall_screen.zones.hit(160, tall_rows[index] + 10), ("axis", axis))
 
+# The corner is reserved whether or not anything acts on it yet, so whatever
+# lands there later inherits settled geometry instead of being retrofitted
+# around the status text.
+corner = tall_screen.zones.hit(280, 480 - 40)
+check("  the corner is a registered target", corner, ("page", "next"))
+check("    and clears a fingertip in both directions",
+      min(320 - PAGE_ZONE_X, 68) / PX_PER_MM >= 9.0, True)
+check("    without covering the status text",
+      max(tall_screen._link.x + tall_screen._link.length * 16,
+          tall_screen._mode.x + tall_screen._mode.length * 16) <= PAGE_ZONE_X,
+      True)
+
 # The short panel has no room, so it must not pretend: nothing drawn, and the
 # physical buttons stay the only way to change step.
 check("a short panel draws no step grid", screen._zones_shown, False)
@@ -241,7 +262,7 @@ display.fills = 0
 screen.splash("connecting...")
 screen.build()
 check("build repaints and restores the layout", display.fills, 2)
-check("  and fields redraw after it", screen._state.y, 170)
+check("  and fields redraw after it", screen._state.y, 218 - STATUS_PITCH)
 
 print()
 if failures:
