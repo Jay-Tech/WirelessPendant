@@ -104,6 +104,40 @@ DEFAULT_STEP_INDEX = 2
 IDLE_MS_BEFORE_CANCEL = 2500
 IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 
+# --- planner depth regulation ---------------------------------------------
+#
+# The controller reports free planner slots in Bf:. That is ground truth for
+# how much work it actually holds, and it replaced a model that was wrong.
+#
+# The model said the pendant had tens of millimetres queued ahead. The machine
+# said it held two to four blocks of a 128-slot planner, and intermittently
+# nothing at all - free at the maximum, reported feed at zero, for around
+# 150 ms at a time. That is a dead stop mid-traverse, and it is the jerk.
+#
+# Six blocks is 300 ms at a 50 ms tick: double the longest observed stall,
+# and the run-off it costs on stopping is 45 mm at F9000. Deeper survives
+# more but overruns further, and the cancel that would bound that cannot be
+# made prompt without breaking re-grip - a pause to reposition the hand and
+# a genuine stop are the same length. So depth is the dial, and this is the
+# conservative end of it.
+#
+# It happened because emission was capped at exactly what the commanded feed
+# drains in a tick. Sending precisely what the machine consumes means depth can
+# never build: the pipeline runs two to four blocks deep forever, so any hiccup
+# anywhere along pendant -> wifi -> sender -> usb -> controller empties it. The
+# sender's own console showed the hiccups directly, as merged blocks - X30 and
+# X37.5 where 7.5 was expected, five messages' worth dispatched at once after a
+# stall.
+#
+# So run ahead of the drain until the controller holds a real cushion, then
+# match the drain to hold it there. Depth is measured, not assumed.
+PLANNER_TARGET_BLOCKS = 6
+
+# How far above the drain rate to emit while filling. Two means the buffer
+# gains one tick of work per tick, reaching target in about PLANNER_TARGET
+# ticks - fast enough that the fill is over before the operator is up to speed.
+PLANNER_FILL_RATIO = 2.0
+
 # --- turn rate drives feed, not distance ----------------------------------
 #
 # Spinning faster raises the feed rate. It does not multiply the distance.
@@ -308,6 +342,7 @@ class JogScheduler:
         self._settled = FEED_MIN_MM_MIN   # deadbanded feed, before any trim
         self.actual_feed = 0          # what the controller reports, pushed in
         self.planner_free = 0         # controller's free planner slots, ditto
+        self.planner_capacity = 0     # largest free count seen = empty planner
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -595,7 +630,23 @@ class JogScheduler:
             # the feed alternates on every message again - 29 changes in 30. The
             # queue settling around half again over target is the cost of a feed
             # that holds still, and that is the right way round.
-            cap = self._cap_feed if self._building else self.feed
+            # Regulate on what the controller reports holding, not on the
+            # modelled queue. The model tracked intent - detents that arrived -
+            # and stayed high while the planner underneath it ran dry, which is
+            # why every conclusion drawn from it was wrong.
+            #
+            # Capacity is the largest free count ever seen, which is the planner
+            # empty. Until a Bf: figure arrives capacity is zero and this falls
+            # back to the old modelled behaviour, so a controller with the
+            # buffer-state bit off still jogs.
+            if self.planner_free > self.planner_capacity:
+                self.planner_capacity = self.planner_free
+            if self.planner_capacity:
+                held = self.planner_capacity - self.planner_free
+                cap = (self.feed * PLANNER_FILL_RATIO
+                       if held < PLANNER_TARGET_BLOCKS else self.feed)
+            else:
+                cap = self._cap_feed if self._building else self.feed
             allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)
             if allowed < 1:
                 allowed = 1

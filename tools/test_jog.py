@@ -16,7 +16,8 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          BUFFER_TICKS, BUFFER_HYSTERESIS,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
-                         FEED_DEADBAND, FEED_BUILD_TRIM)
+                         FEED_DEADBAND, FEED_BUILD_TRIM,
+                         PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -460,6 +461,58 @@ sched.enabled = True
 enc.move(4)
 check("  and motion while disabled is discarded, not replayed",
       motion(sched.tick()), {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
+
+print("\nplanner depth regulation")
+
+# The controller reports free planner slots. Emission runs above the drain rate
+# while the planner is shallow and settles back to it once supplied, which is
+# what stops a transport hiccup from emptying the buffer and stalling the axis.
+CAPACITY = 128
+
+def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE):
+    """Drive a steady turn while the controller reports a fixed depth."""
+    enc, sched = new_scheduler()
+    for _ in range(step_index):
+        sched.step_up()
+    sched.planner_capacity = CAPACITY
+    sched.planner_free = free
+    sent = 0
+    for _ in range(ticks):
+        enc.move(4 * detents_per_tick)
+        message = motion(sched.tick())
+        if message:
+            sent += abs(message["det"])
+    return sched, sent
+
+# Shallow: the pendant must send more than the machine drains, or depth can
+# never build. This is the case that was broken - emission exactly matched the
+# drain, so the planner sat two to four blocks deep and any stall emptied it.
+starved, sent_starved = run_at_depth(CAPACITY)
+supplied, sent_supplied = run_at_depth(CAPACITY - PLANNER_TARGET_BLOCKS)
+check("an empty planner is fed faster than it drains", sent_starved > sent_supplied, True)
+# Not the exact ratio: a tick carries a whole number of detents, so the cap
+# truncates, and the older build trim still shades the feed while the queue
+# model fills. Both push the measured figure above the nominal one. What
+# matters is that filling is substantially faster than draining and not so
+# fast it overshoots the planner.
+ratio = sent_starved / max(sent_supplied, 1)
+check("  and a supplied one is fed at the drain rate",
+      PLANNER_FILL_RATIO * 0.85 < ratio < PLANNER_FILL_RATIO * 1.25, True)
+
+# Without a Bf: figure there is no ground truth, so the old modelled behaviour
+# has to survive - a controller with the buffer-state bit off still has to jog.
+enc, sched = new_scheduler()
+check("no planner report falls back to the modelled queue", sched.planner_capacity, 0)
+enc.move(4 * 3)
+check("  and still emits", motion(sched.tick()) is not None, True)
+
+# Capacity is learned from the largest free count seen, so it needs no constant
+# and follows a controller with a different planner size.
+enc, sched = new_scheduler()
+sched.planner_free = 35
+enc.move(4)
+sched.tick()
+check("capacity is learned from the reported maximum", sched.planner_capacity, 35)
 
 print()
 if failures:
