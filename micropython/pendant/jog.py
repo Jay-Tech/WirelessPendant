@@ -45,9 +45,14 @@ DEFAULT_STEP_INDEX = 2
 # halt the machine rather than let it run on through a backlog. The risk is
 # firing during a slow turn and truncating a jog mid-move. Someone winding
 # continuously produces a detent at least every ~300 ms even when crawling, so
-# anything quieter than that is a genuine stop. Shorter thresholds cancel
-# between individual detents during normal slow jogging.
-IDLE_MS_BEFORE_CANCEL = 300
+# anything quieter than that is a genuine stop.
+#
+# Raised from 300 ms after machine testing: turning deliberately slowly left
+# gaps longer than that, so it cancelled between individual detents - jog,
+# cancel, jog, cancel - which reads as the machine refusing to move. Bounding
+# the queue (below) is what makes a longer threshold safe: there is little
+# backlog left for a late cancel to have to flush.
+IDLE_MS_BEFORE_CANCEL = 600
 IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 
 # --- turn rate drives feed, not distance ----------------------------------
@@ -77,6 +82,34 @@ FEED_TRACKING_ENABLED = True
 # is meant to avoid.
 FEED_MIN_MM_MIN = 100.0
 FEED_MAX_MM_MIN = 5000.0
+
+# Turn rate, in detents/s, that asks for the full feed rate.
+#
+# Feed is the higher of two things: the rate actually being commanded
+# (rate x step x 60, which must be met or the queue grows), and a curve from
+# this constant. Feeding faster than commanded costs nothing - each move simply
+# finishes early and the queue stays empty - so the curve lets a fine step reach
+# a usable feed without needing an impossible turn rate. At 0.1 mm, matching the
+# commanded rate alone would need 833 detents/s to reach 5000 mm/min.
+RATE_FOR_FULL_FEED = 150.0
+
+# Millimetres of motion allowed to be in flight at once.
+#
+# This is, directly, how far the machine can still travel after the wheel stops.
+# The scheduler tracks an estimate of the queue - adding what it commands,
+# subtracting what the current feed drains each tick - and refuses to add beyond
+# this.
+#
+# Bounding accumulated distance rather than per-tick distance matters: a single
+# quick tick is harmless and must not be clipped, while sustained over-turning
+# is exactly what banked up unboundedly and made run-on grow the longer the
+# pendant was used.
+#
+# The surplus is dropped, not deferred. Turning faster than the machine can
+# follow cannot be honoured - the choice is only between lagging and dropping,
+# and a pendant that saves motion to replay after you stop is far worse than one
+# that simply stops keeping up.
+MAX_QUEUE_MM = 3.0
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
@@ -123,7 +156,9 @@ class JogScheduler:
         self._moving = False
         self._recent = []          # raw counts per tick, most recent last
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
-        self.stats = {"messages": 0, "detents": 0, "cancels": 0}
+        self._queue_mm = 0.0          # estimate of motion in flight
+        self.stats = {"messages": 0, "detents": 0, "cancels": 0,
+                      "dropped_detents": 0}
 
     # --- configuration ----------------------------------------------------
 
@@ -152,6 +187,7 @@ class JogScheduler:
             return None
         self.axis = axis
         self._residual = 0
+        self._queue_mm = 0.0
         self.encoder.take()  # discard motion that arrived during the switch
         if self._moving:
             self._moving = False
@@ -187,16 +223,34 @@ class JogScheduler:
         """
         if not self.feed_tracking:
             return FEED_MAX_MM_MIN
-        commanded = self.turn_rate() * self.step * 60.0
-        if commanded < FEED_MIN_MM_MIN:
+
+        rate = self.turn_rate()
+
+        # Must be met, or the queue grows by the shortfall every tick.
+        commanded = rate * self.step * 60.0
+
+        # May be exceeded freely: a move that finishes early leaves the queue
+        # empty, which is exactly the state we want.
+        span = FEED_MAX_MM_MIN - FEED_MIN_MM_MIN
+        curve = FEED_MIN_MM_MIN + span * min(1.0, rate / RATE_FOR_FULL_FEED)
+
+        feed = commanded if commanded > curve else curve
+        if feed < FEED_MIN_MM_MIN:
             return FEED_MIN_MM_MIN
-        if commanded > FEED_MAX_MM_MIN:
+        if feed > FEED_MAX_MM_MIN:
             return FEED_MAX_MM_MIN
-        return commanded
+        return feed
 
     def tick(self):
         """Advance one interval. Returns a message to send, or None."""
         counts = self.encoder.take()
+
+        # Drain the in-flight estimate by what the machine executes in a tick at
+        # the feed last commanded. Done every tick, including idle ones, so the
+        # queue empties while the wheel is still.
+        self._queue_mm -= (self.feed / 60.0) * (TICK_MS / 1000.0)
+        if self._queue_mm < 0:
+            self._queue_mm = 0.0
 
         if not self.enabled:
             # Keep draining the encoder so motion while disabled is discarded
@@ -228,6 +282,23 @@ class JogScheduler:
 
             # Distance stays exactly one step per detent. Only the feed moves.
             self.feed = self.feed_rate()
+
+            # Refuse to put more in flight than MAX_QUEUE_MM. The surplus is
+            # dropped rather than carried in the residual, which would only
+            # defer the same overshoot to the next tick.
+            room = MAX_QUEUE_MM - self._queue_mm
+            allowed = int(room / self.step)
+            if allowed < 1:
+                # Always let one detent through, or a full queue would stop
+                # motion entirely. The drain still exceeds this, so the queue
+                # continues to empty.
+                allowed = 1
+            if abs(detents) > allowed:
+                self.stats["dropped_detents"] += abs(detents) - allowed
+                detents = allowed if detents > 0 else -allowed
+                self._residual = 0
+
+            self._queue_mm += abs(detents) * self.step
 
             self.stats["messages"] += 1
             self.stats["detents"] += abs(detents)

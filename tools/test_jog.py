@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
-                         FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS)
+                         FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
+                         MAX_QUEUE_MM, RATE_FOR_FULL_FEED)
 
 failures = []
 
@@ -119,22 +120,24 @@ for rate in (1, 3, 6, 12):
 check("distance per detent is identical at every turn speed",
       all(abs(d - 0.1) < 1e-9 for d in per_detent), True)
 
-# A slow turn sits on the floor rather than crawling.
-enc, sched = new_scheduler()
-for _ in range(20):
-    enc.move(4)
-    slow = sched.tick()
-    for _ in range(9):
-        sched.tick()
-check("slow turning feeds at the floor", slow["feed"], FEED_MIN_MM_MIN)
-
-# Feed should equal the rate actually being commanded: detents/s x mm x 60.
+# Feed must never fall below the rate being commanded, or the shortfall queues
+# every tick and runs on after the wheel stops.
 enc, sched = new_scheduler()
 sched.set_step_index(3)                  # 1.0 mm per detent
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4)                          # 1 detent per 20 ms = 50 detents/s
     tracked = sched.tick()
-check("feed matches the commanded rate", tracked["feed"], 50 * 1.0 * 60)
+check("feed meets the commanded rate", tracked["feed"], 50 * 1.0 * 60)
+
+# A fine step can reach full feed at a turn rate a hand can actually produce.
+# Matching the commanded rate alone would need 833 detents/s at 0.1 mm; feeding
+# faster than commanded is free, because the move just finishes early.
+enc, sched = new_scheduler()
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 3)                      # 150 detents/s at 0.1 mm
+    fine = sched.tick()
+check("fine step reaches full feed at a reachable rate",
+      fine["feed"], FEED_MAX_MM_MIN)
 
 # Capped, because asking for more than the machine can deliver only rebuilds
 # the queue this design exists to keep shallow.
@@ -144,7 +147,22 @@ for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 1 mm
     capped = sched.tick()
 check("feed is capped at the ceiling", capped["feed"], FEED_MAX_MM_MIN)
-check("  while distance stays exact", capped["det"] * capped["step"], 6.0)
+
+# Out-turning the machine must drop the surplus, not bank it. Banking is what
+# made run-on grow the longer the pendant was used: every back-and-forth added
+# more than the machine drained, and none of it paused long enough to cancel.
+check("in-flight distance is bounded, so run-on cannot grow",
+      sched._queue_mm <= MAX_QUEUE_MM + 1e-9, True)
+check("  and the dropped detents are counted",
+      sched.stats["dropped_detents"] > 0, True)
+
+# Within what the machine can follow, nothing is dropped at all.
+enc, sched = new_scheduler()
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
+    sched.tick()
+check("nothing is dropped while the machine can keep up",
+      sched.stats["dropped_detents"], 0)
 
 enc, sched = new_scheduler()
 sched.feed_tracking = False
@@ -157,13 +175,13 @@ enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 0.1 mm
     spinning = sched.tick()
-check("fast turning raises the feed", spinning["feed"], 300 * 0.1 * 60)
+check("fast turning raises the feed", spinning["feed"], FEED_MAX_MM_MIN)
 
 for _ in range(RATE_WINDOW_TICKS):
     sched.tick()                         # idle; the window fills with zeros
 enc.move(4)
-check("  and it decays back to the floor while idle",
-      sched.tick()["feed"], FEED_MIN_MM_MIN)
+decayed = sched.tick()["feed"]
+check("  and it decays away while idle", decayed < FEED_MAX_MM_MIN / 10, True)
 
 print("\nrest dither")
 
