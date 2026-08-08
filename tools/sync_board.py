@@ -33,7 +33,7 @@ PENDANT = ROOT / "micropython" / "pendant"
 # fails as "no module named 'pendant'" - the second half of the try/except
 # import - which reads like a packaging problem rather than a missing file.
 MODULES = ["quadrature.py", "protocol.py", "link.py", "jog.py", "buttons.py",
-           "ili9341.py", "st7796.py", "screen.py"]
+           "ili9341.py", "st7796.py", "screen.py", "touch.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
 DEFAULT_DEVICE = board.device()
