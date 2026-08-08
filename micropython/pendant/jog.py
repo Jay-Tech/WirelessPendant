@@ -84,6 +84,13 @@ FEED_TRACKING_ENABLED = True
 FEED_MIN_MM_MIN = 50.0
 FEED_MAX_MM_MIN = 5000.0
 
+# Ceiling per step size, matching STEP_SIZES.
+#
+# A fine step is for placing the tool, not covering ground, so letting it reach
+# the machine's full rate just makes it twitchy to control. Each step gets a
+# ceiling suited to what it is for; the coarse step keeps the full range.
+STEP_MAX_FEED = (300.0, 800.0, 2000.0, 5000.0)
+
 # Millimetres of motion allowed to be in flight at once.
 #
 # This is, directly, how far the machine can still travel after the wheel stops.
@@ -148,6 +155,7 @@ class JogScheduler:
         self._recent = []          # raw counts per tick, most recent last
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self._queue_mm = 0.0          # estimate of motion in flight
+        self._ticks_since_motion = 1  # interval used to measure turn rate
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
                       "dropped_detents": 0}
 
@@ -189,35 +197,28 @@ class JogScheduler:
 
     # --- per tick ---------------------------------------------------------
 
-    def turn_rate(self):
-        """Detents per second, averaged over the full window.
+    def turn_rate(self, detents=0):
+        """Detents per second, from the interval since the last movement.
 
-        Divided by the whole window rather than by however many samples exist
-        yet, so a burst at the very start of a turn averages in instead of
-        reading as a sustained sprint. Accumulated in quadrature counts and
-        converted at the end, which is what gives the sub-detent resolution.
+        Measured as detents divided by the time they took, rather than averaged
+        over a fixed window. A window is wrong in both directions: too slow to
+        rise, so a fast start out-runs the feed and fills the queue, and too
+        slow to fall, so winding down leaves the feed high while detents arrive
+        ever slower - every move then finishes early and waits, which is felt as
+        stutter and jerk as the wheel comes to rest.
+
+        An interval is accurate at any speed and reacts within a single detent
+        either way. terjeio's MPG firmware gets the same measurement from the
+        PIO, which timestamps every edge.
         """
-        total = 0
-        for value in self._recent:
-            total += abs(value)
-        seconds = RATE_WINDOW_TICKS * TICK_MS / 1000.0
-        windowed = (total / COUNTS_PER_DETENT) / seconds
+        if not detents:
+            return 0.0
+        seconds = self._ticks_since_motion * TICK_MS / 1000.0
+        if seconds <= 0:
+            seconds = TICK_MS / 1000.0
+        return abs(detents) / seconds
 
-        # Take whichever is higher: the window, or this tick alone. The window
-        # is too slow to start. Beginning a fast wind, it ramps over its own
-        # length while the operator is already turning hard, so the feed lags,
-        # the queue fills and detents get dropped before it catches up.
-        #
-        # Reading this tick alone gives the rate immediately, and letting the
-        # window win on the way down keeps the decay smooth rather than
-        # collapsing the feed between detents. Fast attack, slow release.
-        if self._recent:
-            instant = (abs(self._recent[-1]) / COUNTS_PER_DETENT) / (TICK_MS / 1000.0)
-            if instant > windowed:
-                return instant
-        return windowed
-
-    def feed_rate(self):
+    def feed_rate(self, detents):
         """Feed in mm/min that matches the current winding speed.
 
         detents/s x mm/detent x 60 is exactly the rate the operator is asking
@@ -244,11 +245,12 @@ class JogScheduler:
         # consecutive jogs blend into continuous motion. terjeio's MPG firmware
         # does the same thing - feed straight from encoder velocity, with no
         # curve above it.
-        feed = self.turn_rate() * self.step * 60.0
+        feed = self.turn_rate(detents) * self.step * 60.0
+        ceiling = STEP_MAX_FEED[self.step_index]
         if feed < FEED_MIN_MM_MIN:
             return FEED_MIN_MM_MIN
-        if feed > FEED_MAX_MM_MIN:
-            return FEED_MAX_MM_MIN
+        if feed > ceiling:
+            return ceiling
         return feed
 
     def tick(self):
@@ -275,6 +277,8 @@ class JogScheduler:
         detents = int(self._residual / 4)
         self._residual -= detents * 4
 
+        self._ticks_since_motion += 1
+
         # Rate history advances every tick, including empty ones - otherwise a
         # pause would keep the previous speed alive and the next slow detent
         # would arrive at the old feed.
@@ -291,7 +295,7 @@ class JogScheduler:
             self._moving = True
 
             # Distance stays exactly one step per detent. Only the feed moves.
-            self.feed = self.feed_rate()
+            self.feed = self.feed_rate(detents)
 
             # Refuse to put more in flight than MAX_QUEUE_MM. The surplus is
             # dropped rather than carried in the residual, which would only
@@ -310,6 +314,7 @@ class JogScheduler:
 
             self._queue_mm += abs(detents) * self.step
 
+            self._ticks_since_motion = 0
             self.stats["messages"] += 1
             self.stats["detents"] += abs(detents)
             return protocol.jog(self.axis, detents, self.step, self.feed)

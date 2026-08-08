@@ -14,7 +14,7 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
-                         MAX_QUEUE_MM)
+                         MAX_QUEUE_MM, STEP_MAX_FEED)
 
 failures = []
 
@@ -110,8 +110,10 @@ print("\nfeed tracking")
 # detent no matter how fast the wheel turns, and only the feed varies. Scaling
 # distance instead makes how far the axis moved depend on how deep the queue
 # was when you stopped, which is the run-off this exists to avoid.
+# Rates chosen to stay inside what the step's feed ceiling can execute. Past
+# that the queue bound deliberately drops, which the drop test below covers.
 per_detent = []
-for rate in (1, 3, 6, 12):
+for rate in (1, 3, 6):
     enc, sched = new_scheduler()
     for _ in range(RATE_WINDOW_TICKS * 2):
         enc.move(4 * rate)
@@ -151,7 +153,7 @@ sched.set_step_index(3)
 for _ in range(RATE_WINDOW_TICKS * 2):
     enc.move(4 * 6)                      # 300 detents/s at 1 mm
     capped = sched.tick()
-check("feed is capped at the ceiling", capped["feed"], FEED_MAX_MM_MIN)
+check("feed is capped at the step's ceiling", capped["feed"], STEP_MAX_FEED[3])
 
 # Out-turning the machine must drop the surplus, not bank it. Banking is what
 # made run-on grow the longer the pendant was used: every back-and-forth added
