@@ -81,15 +81,41 @@ scheduler = None
 pendant_link = None
 screen = None
 
-state = {"dro": None, "machine_state": "?", "status_frames": 0}
+state = {"dro": None, "machine_state": "?", "status_frames": 0,
+         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None}
 
 
 def on_message(message):
     if message.get("t") != protocol.T_STATUS:
         return
     state["status_frames"] += 1
-    state["dro"] = message.get("wpos")
+    wpos = message.get("wpos")
+    state["dro"] = wpos
     state["machine_state"] = message.get("state", "?")
+
+    # True lag: what has been commanded, less what the machine reports moving.
+    # The scheduler's queue is an open-loop model and cannot see the
+    # controller's planner or the sender's buffer, so a backlog accumulating
+    # there is invisible to it. This is measured rather than estimated, and it
+    # is the number that says whether the machine is falling behind.
+    if wpos is None or scheduler is None:
+        return
+    index = AXIS_ORDER.index(scheduler.axis) if scheduler.axis in AXIS_ORDER else 0
+    if index >= len(wpos):
+        return
+
+    reference = state["_ref"]
+    if reference is None or reference[0] != scheduler.axis:
+        state["_ref"] = (scheduler.axis, wpos[index], scheduler.commanded_mm)
+        return
+
+    _, start_pos, start_cmd = reference
+    moved = wpos[index] - start_pos
+    commanded = scheduler.commanded_mm - start_cmd
+    lag = abs(commanded - moved)
+    state["lag_mm"] = lag
+    if lag > state["peak_lag_mm"]:
+        state["peak_lag_mm"] = lag
 
 
 def handle_button(action, event):
@@ -266,10 +292,11 @@ async def report():
         kept = 100 * sent // (sent + dropped) if (sent + dropped) else 100
         link.log(
             "{} | axis {} step {} F{:.0f} | {} | detents={} dropped={} ({}% kept)"
-            " err={}".format(
+            " lag={:.1f}/{:.1f}mm err={}".format(
                 "up" if pendant_link.connected else "DOWN",
                 scheduler.axis, scheduler.step, scheduler.feed, position,
-                sent, dropped, kept, encoder.errors))
+                sent, dropped, kept,
+                state["lag_mm"], state["peak_lag_mm"], encoder.errors))
 
 
 async def main():

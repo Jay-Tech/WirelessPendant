@@ -196,8 +196,13 @@ QUEUE_TICKS = 5.0
 # exactly the arrival rate again, so distance stays true.
 QUEUE_TARGET_FRACTION = 0.5
 
-# How much the feed is trimmed while building that buffer. Small, because it is
-# a transient - once the buffer is at depth the feed returns to the arrival rate.
+# How much the feed is trimmed while the buffer is still filling.
+#
+# Deliberately one-sided. A two-sided regulator was tried and reverted: nudging
+# the feed to hold a depth means the feed moves continuously, and a feed that
+# moves is precisely what stops grblHAL blending consecutive moves - trading the
+# starvation fault for the jerking one. Correcting only upwards keeps the feed
+# still once the buffer is established, which is the property that matters.
 FEED_BUILD_TRIM = 0.85
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
@@ -249,6 +254,13 @@ class JogScheduler:
         self._ticks_since_motion = 0  # interval used to measure turn rate
         self.stats = {"messages": 0, "detents": 0, "cancels": 0,
                       "dropped_detents": 0}
+
+        # Signed distance commanded, for comparison against what the
+        # machine reports actually moving. The scheduler's own queue is
+        # an open-loop model and cannot see the controller's planner or
+        # the sender's buffer, so it cannot detect a backlog building
+        # there. This can.
+        self.commanded_mm = 0.0
 
     # --- configuration ----------------------------------------------------
 
@@ -356,8 +368,8 @@ class JogScheduler:
         target = self.turn_rate(detents) * self.step * 60.0
 
         # While the buffer is shallow, consume a little slower than the wheel
-        # delivers so it can fill. Without this the queue sits at zero and every
-        # short tick starves the planner.
+        # delivers so it can fill. Once at depth the feed is exactly the arrival
+        # rate and holds still, which is what lets the planner blend.
         bound = (target / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
         if self._queue_mm < bound * QUEUE_TARGET_FRACTION:
             target *= FEED_BUILD_TRIM
@@ -451,6 +463,7 @@ class JogScheduler:
                 self._residual = 0
 
             self._queue_mm += abs(detents) * self.step
+            self.commanded_mm += detents * self.step
 
             self._ticks_since_motion = 0
             self.stats["messages"] += 1
