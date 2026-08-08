@@ -27,10 +27,16 @@ except ImportError:
 # interval, so this scheduler is not the bottleneck.
 TICK_MS = 20
 
-# Millimetres per detent. The coarse end matters on a large machine: at 1 mm a
-# 1257 mm (49.5") axis is 12.6 revolutions end to end, while 5 mm makes it 2.5.
-# The fine end is what the wheel is actually for.
-STEP_SIZES = (0.001, 0.01, 0.1, 1.0, 5.0)
+# Quadrature edges per detent, matching the decoder.
+COUNTS_PER_DETENT = 4
+
+# Millimetres per detent.
+#
+# 5 mm is suspended for now. Feed has to be at least rate x step x 60 to avoid
+# lagging, so a coarse step saturates the machine's ceiling at a very low turn
+# rate - 5 mm reaches 5000 mm/min at 17 detents/s, which is barely turning, and
+# everything above that just pins at maximum with no proportional feel left.
+STEP_SIZES = (0.001, 0.01, 0.1, 1.0)
 DEFAULT_STEP_INDEX = 2
 
 # Silence that counts as "the operator stopped" rather than "turning slowly".
@@ -70,11 +76,21 @@ FEED_TRACKING_ENABLED = True
 # jog rate - asking for more than it can deliver just rebuilds the queue this
 # is meant to avoid.
 FEED_MIN_MM_MIN = 100.0
-FEED_MAX_MM_MIN = 4000.0
+FEED_MAX_MM_MIN = 5000.0
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
-RATE_WINDOW_TICKS = 10
+#
+# Measured in raw quadrature counts rather than whole detents, which is four
+# times the resolution for nothing. Counting detents gave a granularity of one
+# detent per window - 5 detents/s, or a 300 mm/min jump at the 1 mm step - so
+# the feed staircased instead of ramping. Counts plus a slightly longer window
+# bring that to roughly 50 mm/min, which reads as smooth.
+#
+# The window doubles as the ramp: feed rises over its length when you start
+# turning and falls over it when you stop, so a longer window is a gentler ramp
+# as well as a finer measurement.
+RATE_WINDOW_TICKS = 15
 
 
 class JogScheduler:
@@ -105,7 +121,7 @@ class JogScheduler:
         self._residual = 0
         self._idle_ticks = 0
         self._moving = False
-        self._recent = []          # detents per tick, most recent last
+        self._recent = []          # raw counts per tick, most recent last
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self.stats = {"messages": 0, "detents": 0, "cancels": 0}
 
@@ -151,13 +167,14 @@ class JogScheduler:
 
         Divided by the whole window rather than by however many samples exist
         yet, so a burst at the very start of a turn averages in instead of
-        reading as a sustained sprint.
+        reading as a sustained sprint. Accumulated in quadrature counts and
+        converted at the end, which is what gives the sub-detent resolution.
         """
         total = 0
         for value in self._recent:
             total += abs(value)
         seconds = RATE_WINDOW_TICKS * TICK_MS / 1000.0
-        return total / seconds
+        return (total / COUNTS_PER_DETENT) / seconds
 
     def feed_rate(self):
         """Feed in mm/min that matches the current winding speed.
@@ -196,8 +213,12 @@ class JogScheduler:
 
         # Rate history advances every tick, including empty ones - otherwise a
         # pause would keep the previous speed alive and the next slow detent
-        # would arrive multiplied.
-        self._recent.append(detents)
+        # would arrive at the old feed.
+        #
+        # Raw counts, not detents: the residual that has not yet formed a whole
+        # detent still represents wheel movement, and including it is what gives
+        # the finer resolution.
+        self._recent.append(counts)
         if len(self._recent) > RATE_WINDOW_TICKS:
             self._recent.pop(0)
 
