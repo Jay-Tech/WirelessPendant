@@ -94,7 +94,7 @@ state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
-         "planner_min": 999, "planner_max": 0}
+         "planner_min": 999, "planner_max": 0, "bf_warned": False}
 
 
 def on_message(message):
@@ -115,6 +115,14 @@ def on_message(message):
     # place it matters. A buffer that never fills means the lookahead the
     # scheduler assumes it is building does not exist.
     free = message.get("bf")
+    if not free and scheduler is not None and not state["bf_warned"]:
+        # Said once, because without it the pendant silently runs its degraded
+        # path: emission pinned at the drain rate, the planner one or two blocks
+        # deep, and motion that ripples for a reason nothing on screen explains.
+        state["bf_warned"] = True
+        log("controller is not reporting Bf: - planner depth is unknown, so")
+        log("  motion will be rougher. Enable the buffer-state bit in $10")
+        log("  (add 2 to its value) and restart the sender.")
     if free is not None and scheduler is not None:
         state["planner_free"] = free
         scheduler.planner_free = free

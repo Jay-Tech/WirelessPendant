@@ -280,36 +280,6 @@ FEED_DEADBAND = 0.10
 # and the machine, not something a ceiling can fix.
 STEP_MAX_FEED = (150.0, 250.0, 2500.0, 9000.0, 12000.0)
 
-# Buffer to keep in hand, as multiples of what the machine drains in a tick.
-#
-# The trace showed the queue reading exactly the distance emitted, every tick -
-# drained and refilled, with nothing in reserve. A tick that arrives light then
-# leaves the planner with nothing and the machine decelerates, which is the
-# stumble. Human turning varies by a third tick to tick, so dips are constant
-# and so were the stumbles.
-#
-# Four ticks, which at a 50 ms tick is 200 ms - the same buffer in time as
-# before, now spread across four blocks instead of one and a half. That is what
-# gives the planner something to look ahead at. It is also, directly, the run-on when
-# the wheel stops - buffer and coasting are the same quantity, so this is the
-# knob that trades one against the other, and it is the only bound on in-flight
-# motion now that the regulator holds the depth.
-BUFFER_TICKS = 4.0
-
-# Hysteresis on the refill decision, as a fraction of the target either side.
-#
-# Without it the buffer crosses its target every tick - refill pushes it above,
-# the next drain takes it below - so the trim toggles every tick and the feed
-# alternates on every message. The wire showed exactly that: F2375, F2256.2,
-# F2375, F2256.2, forever, which is 0.95 apart. grblHAL blends consecutive moves
-# that share a feed, so alternating on every block means it can blend none of
-# them and adjusts velocity between all of them.
-#
-# Refilling starts well below the target and stops well above, so the feed holds
-# still through long runs and moves only when the buffer has genuinely drifted.
-BUFFER_HYSTERESIS = 0.35
-
-
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
 #
@@ -373,9 +343,7 @@ class JogScheduler:
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self._queue_mm = 0.0          # estimate of motion in flight
         self._ticks_since_motion = 0  # interval used to measure turn rate
-        self._building = True         # buffer still filling
         self._direction = 0           # sign of motion currently in flight
-        self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
         self._settled = FEED_MIN_MM_MIN   # deadbanded feed, before any trim
         self.actual_feed = 0          # what the controller reports, pushed in
         self.planner_free = 0         # controller's free planner slots, ditto
@@ -548,32 +516,6 @@ class JogScheduler:
             if target < floor:
                 target = floor
 
-        # What the machine drains at the untrimmed rate, kept for the emission
-        # cap. The cap must not use the trimmed value: emitting exactly what a
-        # reduced feed drains means nothing accumulates, so the buffer the trim
-        # exists to build never appears and the trim just discards motion.
-        self._cap_feed = target
-
-        # Under-feed briefly at the start of a burst so the queue gains the
-        # difference. Emission stays at the full rate, so what is commanded and
-        # what is executed differ by exactly the trim - and that difference is
-        # the buffer.
-        # Under-feed whenever the buffer is below target, not just at the start
-        # of a burst. Building it once and never topping it up meant the first
-        # dip emptied it and it stayed empty - so the protection was gone
-        # exactly when the move had been going long enough to need it.
-        #
-        # The queue is read here after this tick's drain, so this is the buffer
-        # at its trough, which is the number that decides whether the planner
-        # runs dry.
-        wanted = (target / 60.0) * (TICK_MS / 1000.0) * BUFFER_TICKS
-        if self._building:
-            # Keep refilling until comfortably above target, not merely at it.
-            if self._queue_mm > wanted * (1.0 + BUFFER_HYSTERESIS):
-                self._building = False
-        elif self._queue_mm < wanted * (1.0 - BUFFER_HYSTERESIS):
-            self._building = True
-
         # Smooth towards the target rather than jumping to it - but only while
         # already moving. Starting from rest, smoothing would ramp up from the
         # floor over several ticks, and since the queue bound derives from the
@@ -672,7 +614,6 @@ class JogScheduler:
                 self._direction = 0
                 self._queue_mm = 0.0
                 self._residual = 0
-                self._building = True
                 self.stats["reversals"] += 1
                 return protocol.jog_cancel()
             self._direction = direction
@@ -740,7 +681,11 @@ class JogScheduler:
             elif self.planner_capacity:
                 cap = self.feed
             else:
-                cap = self._cap_feed if self._building else self.feed
+                # No Bf: report, so there is no depth to regulate against.
+                # Emit exactly the drain and say so once, rather than
+                # inferring depth from a model - inferring it is what sent
+                # this whole effort chasing the wrong layer for days.
+                cap = self.feed
             # Rounded, not truncated. Truncating biases every tick downwards,
             # and the bias is what the planner feels: emitting less than the
             # drain is exactly how depth is lost. It also lands on values that
