@@ -5,12 +5,10 @@ emitted on a fixed tick rather than sent per click, because a 100 PPR wheel
 spun hard produces ~500 clicks/s and one message each would flood the link for
 no gain - the sender cannot act on them faster than it dispatches anyway.
 
-Tick rate is deliberately set well inside the sender's own jog interval. The
-GrblHAL Sender dispatches proportional jogs every 75 ms; a scheduler here
-running slower than that would add a second, unsynchronised quantiser on top,
-and the two would compound into far more delay than either alone. At 50 Hz
-this contributes ~10 ms average and the sender's existing coalescing does the
-real work.
+Tick rate is set below the sender's dispatch interval, so the sender forwards
+each message as it arrives rather than adding a second, unsynchronised
+quantiser on top. Above it, messages merge into longer blocks - and block
+count, not block length, is what lets the controller's planner hold a feed.
 
 Jog cancel is sent once when motion stops, and again whenever the axis changes
 mid-motion, so a partially executed jog on the old axis does not continue after
@@ -23,63 +21,28 @@ except ImportError:
     from pendant import protocol
 
 
-# 20 Hz. Was 50, then 20, then 10, now back to 20 - and the reason has changed.
+# 20 ms.
 #
-# It was lowered to stop flooding the controller, which was a problem of too
-# much distance. That is now bounded separately by the emission cap, and the
-# constraint that remains is the opposite one: grblHAL decelerates to a stop at
-# the end of the last block in its planner, so holding a feed needs several
-# blocks queued ahead. Sending ten blocks a second while the machine executes
-# ten a second means one or two are ever outstanding.
+# This has been 20, 50, 100 and back, and most of those moves were made against
+# a theory that turned out to be wrong: that grblHAL was being flooded with jog
+# blocks. It was not. The stalls were the sender posting every jog to its UI
+# thread, where they queued behind rendering and console trimming, and the fix
+# belonged there.
 #
-# The machine showed this exactly. At F9000 a 15 ms tick carries 15 mm, and at
-# 1500 mm/s^2 reaching 150 mm/s takes 7.5 mm and stopping takes 7.5 mm - so a
-# 15 mm block is precisely accelerate-then-decelerate, touching the commanded
-# feed for an instant and averaging around 6000. Hence a console reading 9000
-# while the machine dips to 4000.
+# With that gone the constraint is the opposite of what was assumed. What the
+# planner needs to hold a commanded feed is a *number* of blocks, not a
+# distance: at F9000 a 7.5 mm block reaches only sqrt(1500 x 7.5) = 106 mm/s on
+# its own, so at least two must chain to make 150. A 50 ms tick held one to
+# four, right on that threshold, and the reported feed then walked 5400, 6300,
+# 7200, 8100, 9000 - exactly sqrt(1500 x d) for the distance chained at each
+# moment. Continuous re-deciding, felt as steady roughness.
 #
-# Shorter blocks do not fix that alone; more of them queued does, and shorter
-# blocks are how the same buffer measured in time becomes more blocks.
+# A shorter tick buys lookahead without buying run-off, which is the whole
+# point. Run-off is the distance queued; chaining depends on the count. At
+# 20 ms the same 20 mm of lead is seven blocks rather than three.
 #
-# The binding constraint turned out not to be this scheduler at all. At 20 Hz
-# the machine reported a kept ratio falling from 79% to 31% across one traverse,
-# a lag peaking at 187 mm - about the depth of grblHAL's planner buffer - and
-# finally a ten second gap in the status stream as the sender blocked. That is
-# the controller being flooded: more jog blocks per second than it can parse,
-# plan and execute, so its buffer fills and everything upstream stalls behind it.
-#
-# Halving the rate halves the blocks and doubles the distance each carries. The
-# sender coalesces further on its own side, which is the real backpressure.
-#
-# A tick carries a whole number of detents, so at 20 ms and a fast wind a single
-# detent is 17% of the message. With the planner buffer near empty, any tick
-# that comes up one detent short leaves it nothing to execute and it
-# decelerates - which is a continuous jerk through a long move, with grblHAL's
-# reported feed oscillating while the pendant's commanded feed sits perfectly
-# still. At 50 ms the same detent is 7% of a message three times the size.
-#
-# The latency cost is nil in practice: the sender dispatches its own jogs every
-# 75 ms, so this was never the limiting quantiser.
-# Back to 20 ms. It was raised to 50 to cut the number of blocks reaching the
-# controller, on the theory that grblHAL was being flooded. That theory was
-# wrong - the stalls were the sender posting every jog to its UI thread, where
-# they queued behind rendering and console trimming - and with that fixed the
-# constraint reverses.
-#
-# What the planner needs to hold a commanded feed is a number of blocks, not a
-# distance. At F9000 a 7.5 mm block reaches only sqrt(1500 x 7.5) = 106 mm/s on
-# its own, so at least two must chain to reach 150 mm/s. Holding one to four,
-# which is what a 50 ms tick produced, puts the machine right on that threshold:
-# the reported feed then walked 5400, 6300, 7200, 8100, 9000 - precisely
-# sqrt(1500 x d) for the distance chained at each moment - and that continuous
-# re-deciding is felt as steady roughness rather than jerk.
-#
-# A shorter tick fixes it without costing run-off, which is the point. Run-off
-# is the distance queued; chaining depends on the count. At 20 ms the same 20 mm
-# of lead is seven blocks instead of three.
-#
-# The sender's dispatch interval must come down with it, or messages arriving
-# faster than it dispatches are merged back into the long blocks this avoids.
+# The sender's dispatch interval has to come down with it, or the short blocks
+# are merged straight back into long ones.
 TICK_MS = 20
 
 # Quadrature edges per detent, matching the decoder.
@@ -317,45 +280,6 @@ FEED_DEADBAND = 0.10
 # and the machine, not something a ceiling can fix.
 STEP_MAX_FEED = (150.0, 250.0, 2500.0, 9000.0, 12000.0)
 
-# Millimetres of motion allowed to be in flight at once.
-#
-# This is, directly, how far the machine can still travel after the wheel stops.
-# The scheduler tracks an estimate of the queue - adding what it commands,
-# subtracting what the current feed drains each tick - and refuses to add beyond
-# this.
-#
-# Bounding accumulated distance rather than per-tick distance matters: a single
-# quick tick is harmless and must not be clipped, while sustained over-turning
-# is exactly what banked up unboundedly and made run-on grow the longer the
-# pendant was used.
-#
-# The surplus is dropped, not deferred. Turning faster than the machine can
-# follow cannot be honoured - the choice is only between lagging and dropping,
-# and a pendant that saves motion to replay after you stop is far worse than one
-# that simply stops keeping up.
-
-# Feed applied while a burst of motion establishes its buffer, and how long for.
-#
-# Commanding exactly the arrival rate holds the queue wherever it already is -
-# and out of rest that is zero, so the planner has nothing in hand and runs dry
-# on any tick that arrives light. The machine shows this as random jerks and
-# occasional dead stops, and as motion that is smooth only when a ceiling
-# happens to be binding, because a bound ceiling is what fills the queue.
-#
-# So under-feed briefly at the start of a burst to put something in the buffer,
-# then track exactly. Since arrival and drain match after that, what was built
-# stays built - no permanent loss, unlike trimming continuously.
-#
-# Timed rather than measured: the queue is read after the tick's drain, so it
-# always presents at its trough and a measurement-driven version could never
-# tell a filling buffer from a full one.
-# Deliberately gentle. The trim toggles as the buffer crosses its target, so it
-# is a feed change - and feed changes are what stop grblHAL blending. At 20% the
-# toggle was a large step; at 5% it is 10 mm/s on a 200 mm/s move, which the
-# machine absorbs in under 7 ms. The buffer fills more slowly and nothing else
-# notices.
-FEED_BUILD_TRIM = 0.95
-
 # Buffer to keep in hand, as multiples of what the machine drains in a tick.
 #
 # The trace showed the queue reading exactly the distance emitted, every tick -
@@ -405,6 +329,11 @@ BUFFER_HYSTERESIS = 0.35
 RATE_WINDOW_TICKS = max(4, 400 // TICK_MS)
 
 # Per-tick trace, for catching a stall in the act.
+# Ticks without a detent before the wheel counts as no longer driving. Short,
+# because its only job is to tell a wind-down from a stall: two ticks of
+# silence at a 20 ms tick is 40 ms, well inside any real turn.
+MOVING_GRACE_TICKS = 3
+
 TRACE_TICKS = 24            # how much history to keep either side
                             # (ticks, not time - this is a display width)
 TRACE_QUIET_TICKS = 100     # minimum gap between dumps, so one stall is one dump
@@ -668,14 +597,21 @@ class JogScheduler:
             settled = target
         self._settled = settled
 
-        # The trim goes on after the deadband. Applied before it, a change this
-        # small falls inside the band, is suppressed, and the buffer never
-        # fills - the trim has to reach the commanded feed to do anything.
-        if self._building:
-            settled *= FEED_BUILD_TRIM
-            floor = self.feed_floor()
-            if settled < floor:
-                settled = floor
+        # A queue-model trim used to sit here, shading the feed 5% below the
+        # arrival rate while _queue_mm said the buffer was filling, so the
+        # machine drained slower than the pendant sent and depth accumulated.
+        #
+        # It is gone. Planner depth is measured now rather than modelled, and
+        # regulated by how much is emitted rather than by the feed - so the
+        # trim was a second regulator pulling on the same quantity, and the one
+        # steering on a figure the controller kept contradicting. The model
+        # read 220 mm on the run where the machine reported 36.
+        #
+        # _queue_mm survives as a trace column and as the input to the
+        # starvation detector, where being approximate costs nothing.
+        floor = self.feed_floor()
+        if settled < floor:
+            settled = floor
         return settled
 
     def tick(self):
@@ -925,8 +861,12 @@ class JogScheduler:
         the commanded feed decays over a second or so after the last detent
         while the machine finishes what is queued, so a reported feed of zero
         at the end of that is the axis arriving, not a fault.
+
+        Deliberately not _moving, which stays set until the idle timeout at
+        2.5 s - far longer than the wind-down - so gating on it flagged the
+        stops anyway. What matters here is whether detents are still arriving.
         """
-        return self._moving
+        return self._ticks_since_motion < MOVING_GRACE_TICKS
 
     def dump_trace(self, reason):
         """Print the rolling trace with a reason. Rate-limited by the caller."""

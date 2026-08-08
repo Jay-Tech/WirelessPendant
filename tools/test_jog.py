@@ -16,7 +16,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          BUFFER_TICKS, BUFFER_HYSTERESIS,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
-                         FEED_DEADBAND, FEED_BUILD_TRIM,
+                         FEED_DEADBAND,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
                          RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM,
                          MIN_FEED_BLOCK_MS)
@@ -26,8 +26,8 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
 COARSE = STEP_SIZES.index(1.0)
 FINE = STEP_SIZES.index(0.01)
 
-# Long enough for the planner-buffer trim to release, so these measure the
-# settled feed rather than the transient while the buffer fills.
+# Long enough for the rate window to fill, so these measure the settled feed
+# rather than the transient at the start of a burst.
 SETTLE = RATE_WINDOW_TICKS * 6
 
 def feed_for(detents_per_tick, step):
@@ -39,9 +39,8 @@ def near(expected):
     """Tolerance for a settled feed.
 
     The feed is not pinned to the arrival rate: the deadband lets it sit up to
-    10% away, and the buffer regulator deliberately trims it either side to hold
-    the planner supplied. Asserting equality would be asserting those constants
-    rather than the behaviour under test.
+    10% away before it follows a change. Asserting equality would be asserting
+    the deadband width rather than the behaviour under test.
     """
     return expected * 0.12
 
@@ -191,11 +190,12 @@ sched.set_step_index(COARSE)
 for _ in range(SETTLE):
     enc.move(4 * 40)          # well past what the ceiling allows
     capped = sched.tick()
-# The ceiling is a bound on the target; the commanded feed may sit a trim below
-# it while the planner buffer is refilling.
+# The commanded feed now sits exactly on the ceiling. It used to be allowed a
+# few percent under, because a queue-model trim shaded it while that model
+# thought the buffer was filling - a second regulator, since retired.
 ceiling_x = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed is capped at the step's ceiling",
-      ceiling_x * FEED_BUILD_TRIM - 1 <= capped["feed"] <= ceiling_x + 1, True)
+      abs(capped["feed"] - ceiling_x) <= 1, True)
 
 # Z is far slower than X and Y here, so the ceiling has to follow the axis.
 enc, sched = new_scheduler(axis="Z")
@@ -204,7 +204,7 @@ for _ in range(SETTLE):
     enc.move(4 * 40)
     z_capped = sched.tick()
 check("Z is capped at its own lower ceiling",
-      AXIS_MAX_FEED["Z"] * FEED_BUILD_TRIM - 1 <= z_capped["feed"]
+      AXIS_MAX_FEED["Z"] - 1 <= z_capped["feed"]
       <= AXIS_MAX_FEED["Z"] + 1, True)
 
 # Out-turning the machine must drop the surplus, not bank it. Banking is what
@@ -280,7 +280,7 @@ settled = feeds[len(feeds) // 2:]               # ignore the opening ramp
 # percent it swung by when it was following every jitter.
 spread = (max(settled) - min(settled)) / max(settled)
 check("a steady hand produces a nearly steady feed",
-      spread <= FEED_DEADBAND + (1 - FEED_BUILD_TRIM) + 0.02, True)
+      spread <= FEED_DEADBAND + 0.02, True)
 
 # It must still follow a genuine change of speed.
 for _ in range(RATE_WINDOW_TICKS * 2):
@@ -319,7 +319,7 @@ for _ in range(SETTLE):
     pinned = sched.tick()
 ceiling = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed reaches its ceiling rather than stalling short",
-      ceiling * FEED_BUILD_TRIM - 1 <= pinned["feed"] <= ceiling + 1, True)
+      abs(pinned["feed"] - ceiling) <= 1, True)
 
 # Reported from the machine: a dead stop, a slight pause, then a ramp back up,
 # about three times across a 49 inch traverse and twice as often at 0.5 mm.
