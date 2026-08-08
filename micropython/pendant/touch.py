@@ -127,34 +127,3 @@ class Touch:
         y = ((data[3] & 0x0F) << 8) | data[4]
         self.stats["taps"] += 1
         return x, y
-
-
-class Zones:
-    """Rectangular hit targets, resolved newest-first.
-
-    Held as data rather than as code so the layout owns the geometry and this
-    owns nothing but the arithmetic. Anything that draws a target registers the
-    same rectangle it drew, which is what stops the two drifting apart - a
-    touch target that has quietly moved away from its label is invisible until
-    someone is standing at the machine wondering why the screen ignores them.
-    """
-
-    def __init__(self):
-        self._zones = []
-
-    def add(self, name, x, y, w, h, value=None):
-        self._zones.append((name, x, y, x + w, y + h, value))
-
-    def clear(self):
-        self._zones = []
-
-    def hit(self, x, y):
-        """(name, value) for the zone containing the point, or None.
-
-        Later registrations win, so a zone drawn on top of another is the one
-        that answers - matching what the operator can see.
-        """
-        for name, x0, y0, x1, y1, value in reversed(self._zones):
-            if x0 <= x < x1 and y0 <= y < y1:
-                return name, value
-        return None

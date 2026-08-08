@@ -55,6 +55,27 @@ DIGITS_X = 30
 DIGITS = 9
 TOP_MARGIN = 20
 
+# Step sizes as touch targets, laid out row by row.
+#
+# Must cover jog.STEP_SIZES exactly - a step reachable by button but not by
+# touch is one the operator cannot select once the buttons are gone, and a
+# touch target for a step that does not exist selects nothing. Asserted in the
+# tests rather than trusted.
+#
+# Three then two rather than five across. The panel is 49.56 mm over 320 px, so
+# five across is 9.9 mm per target - a fingertip, with nothing spare - and this
+# is used without looking. Three across is 16.5 mm.
+STEP_ROWS = ((0.001, 0.01, 0.1), (0.5, 1.0))
+
+ZONE_ROW_H = 80
+ZONE_GAP = 8
+ZONE_MARGIN = 16
+
+# Below this much free height the step grid is left out entirely and the
+# physical step buttons remain the only way to change it. That is the 320x240
+# panel, where the rows and the status block already meet.
+MIN_ZONE_SPACE = ZONE_ROW_H * 2 + ZONE_GAP + ZONE_MARGIN * 2
+
 
 class Field:
     """Fixed-position text, repainting only the characters that changed."""
@@ -102,7 +123,13 @@ class DroScreen:
         self.display = display
         self._big = Glyphs(scale=4)      # 32 px - the position readout
         self._medium = Glyphs(scale=3)   # 24 px - axis labels
-        self._small = Glyphs(scale=2)    # 16 px - status lines
+        self._small = Glyphs(scale=2)    # 16 px - status lines and zone labels
+
+        # Registered by whatever draws a target, so the geometry lives in one
+        # place. A hit box that has drifted from its label is invisible: the
+        # screen simply ignores you.
+        self.zones = Zones()
+        self._step = None
         self.build()
 
     def build(self):
@@ -122,15 +149,38 @@ class DroScreen:
         mode_y = link_y - STATUS_PITCH
         state_y = mode_y - STATUS_PITCH
 
+        # A tall panel earns a step grid; a short one gives its height to the
+        # position rows and keeps the physical step buttons.
+        rows_min = TOP_MARGIN + len(AXES) * ROW_PITCH
+        self._zones_shown = (state_y - rows_min) >= MIN_ZONE_SPACE
+
+        if self._zones_shown:
+            zones_top = state_y - ZONE_MARGIN - (ZONE_ROW_H * 2 + ZONE_GAP)
+            pitch = (zones_top - TOP_MARGIN - ZONE_MARGIN) // len(AXES)
+        else:
+            zones_top = None
+            pitch = ROW_PITCH
+
+        self.zones.clear()
         self._labels = {}
         self._positions = {}
         for row, axis in enumerate(AXES):
-            y = TOP_MARGIN + row * ROW_PITCH
+            y = TOP_MARGIN + row * pitch
             label = Field(self.display, self._medium, 4, y + 4, 1, color=GREY)
             label.set(axis)
             self._labels[axis] = label
             self._positions[axis] = Field(self.display, self._big, DIGITS_X, y,
                                           DIGITS)
+            # The whole row is the target, not just the label. It is already
+            # the thing that highlights to show what the wheel will move, so
+            # tapping it to choose is the same gesture read backwards - and a
+            # full-width row is the largest target the panel can offer.
+            self.zones.add("axis", 0, TOP_MARGIN + row * pitch - 4,
+                           self.display.width, pitch, axis)
+
+        self._zone_fields = {}
+        if self._zones_shown:
+            self._build_step_zones(zones_top)
 
         # The mode line is the widest thing on the panel and starts hard against
         # the left edge, because it needs every cell: 16 px glyphs give exactly
@@ -151,6 +201,53 @@ class DroScreen:
         self.set_state("?")
         self.set_mode("?", 0.0, True, 0.0)
         self.set_link(False)
+
+    def _build_step_zones(self, top):
+        """Draw the step grid and register each cell as it is drawn."""
+        width = self.display.width
+        for row_index, row in enumerate(STEP_ROWS):
+            y = top + row_index * (ZONE_ROW_H + ZONE_GAP)
+            # The last cell in a row absorbs the rounding, so the grid reaches
+            # the right edge exactly instead of leaving a sliver that belongs
+            # to nothing and swallows taps.
+            cell = width // len(row)
+            for index, step in enumerate(row):
+                x = index * cell
+                w = (width - x) if index == len(row) - 1 else cell
+                self._draw_zone(x, y, w, ZONE_ROW_H, step, False)
+                self.zones.add("step", x, y, w, ZONE_ROW_H, step)
+                self._zone_fields[step] = (x, y, w, ZONE_ROW_H)
+
+    def _draw_zone(self, x, y, w, h, step, selected):
+        """One step cell: a border, and its value centred."""
+        edge = AMBER if selected else DIM
+        self.display.fill_rect(x, y, w, h, BLACK)
+        # Border rather than a filled block. A solid highlight at this size is
+        # a lot of lit pixels next to a position readout that has to stay
+        # legible in a lit shop.
+        self.display.fill_rect(x, y, w, 2, edge)
+        self.display.fill_rect(x, y + h - 2, w, 2, edge)
+        self.display.fill_rect(x, y, 2, h, edge)
+        self.display.fill_rect(x + w - 2, y, 2, h, edge)
+
+        text = "{:g}".format(step)
+        glyph_w = self._small.width
+        text_x = x + (w - len(text) * glyph_w) // 2
+        text_y = y + (h - self._small.height) // 2
+        field = Field(self.display, self._small, text_x, text_y, len(text),
+                      color=WHITE if selected else GREY)
+        field.set(text)
+
+    def set_step_highlight(self, step):
+        """Mark which step cell is selected, repainting only what changed."""
+        if not self._zones_shown or step == self._step:
+            return
+        for value, box in self._zone_fields.items():
+            was = value == self._step
+            now = value == step
+            if was or now:
+                self._draw_zone(box[0], box[1], box[2], box[3], value, now)
+        self._step = step
 
     def set_position(self, values):
         for axis, value in zip(AXES, values):
@@ -179,6 +276,7 @@ class DroScreen:
         # different number to the one commanded is worse than a missing unit.
         self._mode.set("{} {} {} F{:.0f}".format(
             axis, step, "HALT" if halt_on_stop else "QUEUE", feed))
+        self.set_step_highlight(step)
         # Highlight the selected axis label so the operator can see what the
         # wheel will move without reading the smaller mode line.
         for name, field in self._labels.items():
@@ -192,3 +290,34 @@ class DroScreen:
         self.display.fill(BLACK)
         Field(self.display, self._small, 8, self.display.height // 2,
               len(message)).set(message)
+
+
+class Zones:
+    """Rectangular hit targets, resolved newest-first.
+
+    Held as data rather than as code so the layout owns the geometry and this
+    owns nothing but the arithmetic. Anything that draws a target registers the
+    same rectangle it drew, which is what stops the two drifting apart - a
+    touch target that has quietly moved away from its label is invisible until
+    someone is standing at the machine wondering why the screen ignores them.
+    """
+
+    def __init__(self):
+        self._zones = []
+
+    def add(self, name, x, y, w, h, value=None):
+        self._zones.append((name, x, y, x + w, y + h, value))
+
+    def clear(self):
+        self._zones = []
+
+    def hit(self, x, y):
+        """(name, value) for the zone containing the point, or None.
+
+        Later registrations win, so a zone drawn on top of another is the one
+        that answers - matching what the operator can see.
+        """
+        for name, x0, y0, x1, y1, value in reversed(self._zones):
+            if x0 <= x < x1 and y0 <= y < y1:
+                return name, value
+        return None

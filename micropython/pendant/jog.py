@@ -382,6 +382,20 @@ class JogScheduler:
         self.step_index = max(0, min(index, len(STEP_SIZES) - 1))
         return self.step
 
+    def set_step(self, step):
+        """Select a step by value rather than by position on the ladder.
+
+        The touch grid knows values, not indices - it draws them - and
+        resolving here keeps the layout from having to know the ladder's order.
+        A value not on the ladder is ignored rather than clamped: it means the
+        grid and STEP_SIZES have drifted, and silently selecting the nearest
+        step would hide that.
+        """
+        for index, value in enumerate(STEP_SIZES):
+            if value == step:
+                return self.set_step_index(index)
+        return self.step
+
     def step_up(self):
         return self.set_step_index(self.step_index + 1)
 

@@ -50,10 +50,16 @@ AXIS_ORDER = ("X", "Y", "Z")
 
 # Wire the buttons you have; the rest idle high through their pull-ups and stay
 # silent, so unpopulated entries cost nothing.
+# Axis and step selection moved to the touch panel: the axis rows and the step
+# grid are both larger targets than a button and, unlike a button, say what is
+# selected without being read back off a status line. GP4-GP6 are free.
+#
+# What stays physical is what has to work without looking, and what has to work
+# while a job is running - feed hold and cycle start are the only pendant
+# commands the sender will forward mid-job, and hunting for a touch target is
+# not something to do with a tool in the work. Zeroing stays on a long hold for
+# the same reason it always was: it rewrites the work offset.
 BUTTON_MAP = (
-    (4, "axis_next"),
-    (5, "step_down"),
-    (6, "step_up"),
     (7, "feed_hold"),
     (8, "cycle_start"),
     # Zeroing fires on a long hold, never a tap. It rewrites the work offset,
@@ -71,6 +77,16 @@ DISPLAY_ENABLED = True
 SPI_ID = 0
 PIN_SCK, PIN_MOSI = 18, 19
 PIN_CS, PIN_DC, PIN_RST, PIN_BL = 17, 20, 21, 22
+
+# Capacitive touch, on its own I2C bus. Level converted on the module, so 3.3V
+# logic is safe against it.
+PIN_TOUCH_SDA, PIN_TOUCH_SCL = 10, 11
+PIN_TOUCH_INT, PIN_TOUCH_RST = 12, 13
+TOUCH_I2C_ID = 1
+
+# Well inside a finger's dwell time, and cheap: the I2C read is a few
+# hundred microseconds against the SPI the panel is already doing.
+TOUCH_POLL_MS = 30
 
 # Which panel is fitted. "st7796" is the MSP3525/MSP3526 3.5" 320x480 IPS;
 # "ili9341" is the 2.4" 320x240 it replaced, kept because it is the fallback
@@ -101,6 +117,7 @@ encoder = None
 scheduler = None
 pendant_link = None
 screen = None
+touch = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
@@ -216,30 +233,6 @@ def handle_button(action, event):
     """Map one button event onto pendant state or a message to the sender."""
     # Axis and step live entirely on the pendant: they change what future jog
     # messages say, and the sender has no opinion about them.
-    if event == PRESS and action == "axis_next":
-        index = AXIS_ORDER.index(scheduler.axis) if scheduler.axis in AXIS_ORDER else -1
-        cancel = scheduler.set_axis(AXIS_ORDER[(index + 1) % len(AXIS_ORDER)])
-        link.log("axis -> {}".format(scheduler.axis))
-        return cancel
-
-    # Holding the axis button toggles jog behaviour. On a button rather than a
-    # constant because the two only differ by feel, and the comparison has to
-    # happen standing at the machine - `mpremote run` holds the serial port for
-    # the whole session, so there is no REPL available to flip it live.
-    if event == LONG_PRESS and action == "axis_next":
-        scheduler.cancel_on_stop = not scheduler.cancel_on_stop
-        link.log("jog mode -> {}".format(
-            "HALT on stop" if scheduler.cancel_on_stop else "QUEUE and execute"))
-        return None
-
-    if event == PRESS and action == "step_up":
-        link.log("step -> {} mm".format(scheduler.step_up()))
-        return None
-
-    if event == PRESS and action == "step_down":
-        link.log("step -> {} mm".format(scheduler.step_down()))
-        return None
-
     if action == "zero_axis":
         if event == PRESS:
             link.log("hold to zero {}".format(scheduler.axis))
@@ -271,6 +264,41 @@ async def poll_buttons():
             if message is not None and pendant_link is not None:
                 pendant_link.send(message)
         await asyncio.sleep_ms(BUTTON_POLL_MS)
+
+
+def start_touch():
+    """Bring up the touch controller, or run without it.
+
+    Failing soft for the same reason the display does: axis and step selection
+    is a convenience, and a pendant that refuses to jog because a touch panel
+    is unplugged is worse than one that jogs without selection. The log line
+    says which, so a silently button-less pendant is not a mystery.
+    """
+    try:
+        from touch import Touch
+    except ImportError:
+        try:
+            from pendant.touch import Touch
+        except ImportError as exc:
+            link.log("touch module missing ({}) - selection unavailable".format(exc))
+            return None
+
+    try:
+        panel = Touch(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST,
+                      PIN_TOUCH_INT, TOUCH_I2C_ID)
+    except Exception as exc:
+        link.log("touch unavailable ({}: {})".format(type(exc).__name__, exc))
+        return None
+
+    if not panel.present:
+        link.log("no touch controller on I2C{} (SDA GP{}, SCL GP{})".format(
+            TOUCH_I2C_ID, PIN_TOUCH_SDA, PIN_TOUCH_SCL))
+        link.log("  axis and step cannot be selected - check the 6P touch FPC")
+        return panel
+
+    link.log("touch FT6336U (id 0x{:02X}) on GP{}/GP{}".format(
+        panel.chip_id, PIN_TOUCH_SDA, PIN_TOUCH_SCL))
+    return panel
 
 
 def start_display():
@@ -305,6 +333,45 @@ def start_display():
         link.log("display unavailable ({}: {}) - running headless".format(
             type(exc).__name__, exc))
         return None
+
+
+async def watch_touch():
+    """Turn taps into axis and step selections.
+
+    Runs as its own task rather than inside the display loop, because the
+    display redraws at 5 Hz and a selection that took up to 200 ms to register
+    feels broken in the hand. Polling is 30 ms; the I2C read is a few hundred
+    microseconds, so this costs nothing next to the SPI the panel is already
+    doing.
+    """
+    if touch is None or screen is None or not touch.present:
+        return
+
+    while True:
+        try:
+            point = touch.poll()
+            if point is not None:
+                hit = screen.zones.hit(point[0], point[1])
+                if hit is not None:
+                    kind, value = hit
+                    if kind == "axis" and value != scheduler.axis:
+                        # Changing axis mid-motion has to flush what is queued,
+                        # or the old axis keeps running on after the operator
+                        # has moved on. set_axis returns that cancel.
+                        cancel = scheduler.set_axis(value)
+                        if cancel and pendant_link:
+                            pendant_link.send(cancel)
+                        link.log("axis -> {}".format(value))
+                    elif kind == "step":
+                        scheduler.set_step(value)
+                        link.log("step -> {} mm".format(value))
+        except Exception as exc:
+            # A touch fault must not take the pendant down. The wheel and the
+            # link are the parts that matter; selection is a convenience.
+            link.log("touch error: {}: {}".format(type(exc).__name__, exc))
+            await asyncio.sleep_ms(500)
+
+        await asyncio.sleep_ms(TOUCH_POLL_MS)
 
 
 async def refresh_display():
@@ -404,12 +471,13 @@ async def report():
 
 
 async def main():
-    global encoder, scheduler, pendant_link, screen
+    global encoder, scheduler, pendant_link, screen, touch
 
     print("\ngrblHAL wireless pendant")
     print("=" * 46)
 
     screen = start_display()
+    touch = start_touch()
     encoder = Quadrature(ENCODER_PIN_A, ENCODER_PIN_B)
     link.log("handwheel on GP{}/GP{}".format(ENCODER_PIN_A, ENCODER_PIN_B))
 
@@ -440,6 +508,7 @@ async def main():
         poll_buttons(),
         publish_mode(),
         refresh_display(),
+        watch_touch(),
         status_led(),
         report(),
     )

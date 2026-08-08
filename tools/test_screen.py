@@ -41,7 +41,10 @@ sys.modules.setdefault("ili9341", _ili9341)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
-from pendant.screen import DroScreen, AXES, STATUS_PITCH  # noqa: E402
+from pendant.screen import (DroScreen, AXES, STATUS_PITCH,  # noqa: E402
+                            ROW_PITCH, STEP_ROWS)
+from pendant.jog import STEP_SIZES  # noqa: E402
+from pendant.screen import Zones  # noqa: E402
 
 failures = []
 
@@ -61,11 +64,16 @@ class FakeDisplay:
         self.width = width
         self.height = height
         self.blits = []
+        self.rects = []
         self.fills = 0
 
     def fill(self, color):
         self.fills += 1
         self.blits = []
+        self.rects = []
+
+    def fill_rect(self, x, y, w, h, color):
+        self.rects.append((x, y, w, h))
 
     def blit(self, buffer, x, y, w, h):
         self.blits.append((x, y, w, h))
@@ -73,8 +81,9 @@ class FakeDisplay:
 
 def extent(display):
     """Bounding box of everything drawn, as (right, bottom)."""
-    right = max((x + w for x, _, w, _ in display.blits), default=0)
-    bottom = max((y + h for _, y, _, h in display.blits), default=0)
+    drawn = display.blits + display.rects
+    right = max((x + w for x, _, w, _ in drawn), default=0)
+    bottom = max((y + h for _, y, _, h in drawn), default=0)
     return right, bottom
 
 
@@ -117,12 +126,93 @@ tall_screen = DroScreen(tall)
 check("status follows the bottom edge", tall_screen._link.y, 480 - 22)
 check("  keeping its spacing", tall_screen._mode.y,
       tall_screen._link.y - STATUS_PITCH)
-check("position rows stay at the top",
-      [tall_screen._positions[a].y for a in AXES], [20, 66, 112])
+# Rows spread rather than keeping the short panel's pitch. The extra height is
+# what turns each row from a readout into a touch target.
+#
+# Asserted in millimetres, not pixels. Pixels say nothing about whether a
+# finger can hit it: this panel is 49.56 mm across 320 px, so a pixel is
+# 0.155 mm, and the same count on a different panel would be a different
+# target. A fingertip needs about 9 mm when used without looking, which a
+# pendant is.
+PX_PER_MM = 320 / 49.56
+tall_rows = [tall_screen._positions[a].y for a in AXES]
+tall_pitch = tall_rows[1] - tall_rows[0]
+check("position rows spread to fill the extra height", tall_pitch > ROW_PITCH,
+      True)
+check("  giving each row a fingertip-sized target",
+      tall_pitch / PX_PER_MM >= 9.0, True)
+check("  and they stay evenly spaced", tall_rows[2] - tall_rows[1], tall_pitch)
 
 right, bottom = extent(tall)
 check("still nothing past the right edge", right <= 320, True)
 check("  or the bottom", bottom <= 480, True)
+
+print("\nstep zones")
+
+# Every step must be reachable by touch once the physical step buttons are
+# gone, and every target must select a step that exists. Drift either way is
+# invisible: a missing target is a step the operator simply cannot choose.
+laid_out = tuple(step for row in STEP_ROWS for step in row)
+check("the grid covers every step size", sorted(laid_out), sorted(STEP_SIZES))
+
+# Registered geometry has to match what was drawn, which is why the same code
+# does both. Tapping the centre of a cell must select that cell's step.
+for step in laid_out:
+    zx, zy, zw, zh = tall_screen._zone_fields[step]
+    check("  tapping the {} cell selects it".format(step),
+          tall_screen.zones.hit(zx + zw // 2, zy + zh // 2), ("step", step))
+    check("    and it clears a fingertip",
+          min(zw, zh) / PX_PER_MM >= 9.0, True)
+
+# Cells must tile: no gap that swallows a tap, and the last reaches the right
+# edge rather than leaving a sliver belonging to nothing.
+for row in STEP_ROWS:
+    boxes = sorted(tall_screen._zone_fields[s] for s in row)
+    check("  a row of {} reaches the right edge".format(len(row)),
+          boxes[-1][0] + boxes[-1][2], 320)
+    gaps = [boxes[i + 1][0] - (boxes[i][0] + boxes[i][2])
+            for i in range(len(boxes) - 1)]
+    check("    with no gaps between cells", gaps, [0] * len(gaps))
+
+# Axis rows are targets too - that is what replaces the axis toggle button.
+for index, axis in enumerate(AXES):
+    check("  tapping the {} row selects it".format(axis),
+          tall_screen.zones.hit(160, tall_rows[index] + 10), ("axis", axis))
+
+# The short panel has no room, so it must not pretend: nothing drawn, and the
+# physical buttons stay the only way to change step.
+check("a short panel draws no step grid", screen._zones_shown, False)
+check("  and registers no step zone", screen.zones.hit(160, 200), None)
+
+print("\nzone arithmetic")
+
+# Exercised directly, because the layout above only ever taps cell centres and
+# these are the cases that bite at the edges.
+zones = Zones()
+zones.add("axis", 0, 20, 320, 46, "X")
+zones.add("axis", 0, 66, 320, 46, "Y")
+
+# Half-open bounds, so adjacent zones tile without overlapping and without a
+# dead line between them that swallows a tap.
+check("the boundary belongs to the lower zone", zones.hit(160, 66),
+      ("axis", "Y"))
+check("  and the one above ends just before it", zones.hit(160, 65),
+      ("axis", "X"))
+check("outside every zone hits nothing", zones.hit(160, 5), None)
+check("  including past the width", zones.hit(400, 40), None)
+
+# Later wins, matching what the operator sees: whatever is drawn on top is
+# what they are aiming at.
+stacked = Zones()
+stacked.add("under", 0, 0, 200, 100, "background")
+stacked.add("over", 50, 25, 100, 50, "button")
+check("the zone registered last answers", stacked.hit(100, 50),
+      ("over", "button"))
+check("  while beside it the one beneath still does", stacked.hit(10, 50),
+      ("under", "background"))
+
+stacked.clear()
+check("clearing removes every zone", stacked.hit(100, 50), None)
 
 print("\nredraw")
 
