@@ -130,6 +130,8 @@ class DroScreen:
         # screen simply ignores you.
         self.zones = Zones()
         self._step = None
+        self._axis = None
+        self._axis_boxes = {}
         self.build()
 
     def build(self):
@@ -162,6 +164,8 @@ class DroScreen:
             pitch = ROW_PITCH
 
         self.zones.clear()
+        self._axis_boxes = {}
+        self._axis = None
         self._labels = {}
         self._positions = {}
         for row, axis in enumerate(AXES):
@@ -175,8 +179,15 @@ class DroScreen:
             # the thing that highlights to show what the wheel will move, so
             # tapping it to choose is the same gesture read backwards - and a
             # full-width row is the largest target the panel can offer.
-            self.zones.add("axis", 0, TOP_MARGIN + row * pitch - 4,
-                           self.display.width, pitch, axis)
+            box = (0, y - 4, self.display.width, pitch)
+            self._axis_boxes[axis] = box
+            self.zones.add("axis", box[0], box[1], box[2], box[3], axis)
+            if self._zones_shown:
+                # Outlined only where the rows are actually targets. On a panel
+                # too short for the step grid the buttons are still doing this
+                # job, and a border promising a tap that is not read is worse
+                # than no border.
+                self._draw_border(box, False)
 
         self._zone_fields = {}
         if self._zones_shown:
@@ -218,17 +229,29 @@ class DroScreen:
                 self.zones.add("step", x, y, w, ZONE_ROW_H, step)
                 self._zone_fields[step] = (x, y, w, ZONE_ROW_H)
 
-    def _draw_zone(self, x, y, w, h, step, selected):
-        """One step cell: a border, and its value centred."""
+    def _draw_border(self, box, selected):
+        """Outline a touch target. Dim means tappable, amber means selected.
+
+        Every target carries one, not just the active one. A border that
+        appears only on selection says nothing about what else can be tapped,
+        and on a panel with no other affordance that is the whole of the
+        discoverability.
+
+        An outline rather than a filled block: a solid highlight at this size
+        is a lot of lit pixels beside a position readout that has to stay
+        legible in a lit shop.
+        """
+        x, y, w, h = box
         edge = AMBER if selected else DIM
-        self.display.fill_rect(x, y, w, h, BLACK)
-        # Border rather than a filled block. A solid highlight at this size is
-        # a lot of lit pixels next to a position readout that has to stay
-        # legible in a lit shop.
         self.display.fill_rect(x, y, w, 2, edge)
         self.display.fill_rect(x, y + h - 2, w, 2, edge)
         self.display.fill_rect(x, y, 2, h, edge)
         self.display.fill_rect(x + w - 2, y, 2, h, edge)
+
+    def _draw_zone(self, x, y, w, h, step, selected):
+        """One step cell: a border, and its value centred."""
+        self.display.fill_rect(x, y, w, h, BLACK)
+        self._draw_border((x, y, w, h), selected)
 
         text = "{:g}".format(step)
         glyph_w = self._small.width
@@ -281,6 +304,15 @@ class DroScreen:
         # wheel will move without reading the smaller mode line.
         for name, field in self._labels.items():
             field.set(name, AMBER if name == axis else GREY)
+
+        # And move the border, repainting only the two rows whose state
+        # changed rather than all of them - the same reason every other field
+        # here tracks what it last drew.
+        if self._zones_shown and axis != self._axis:
+            for name, box in self._axis_boxes.items():
+                if name in (axis, self._axis):
+                    self._draw_border(box, name == axis)
+            self._axis = axis
 
     def set_link(self, connected):
         self._link.set("link up" if connected else "LINK DOWN",

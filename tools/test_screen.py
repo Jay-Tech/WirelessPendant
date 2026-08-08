@@ -184,6 +184,25 @@ for index, axis in enumerate(AXES):
 check("a short panel draws no step grid", screen._zones_shown, False)
 check("  and registers no step zone", screen.zones.hit(160, 200), None)
 
+# The selected axis carries a border like the step cells, and every row carries
+# a dim one - which is the only thing on the panel saying the rows are tappable
+# at all.
+tall_screen.set_mode("Y", 0.1, True, 0.0)
+check("every row has a border box, not just the selected one",
+      sorted(tall_screen._axis_boxes), sorted(AXES))
+selected_box = tall_screen._axis_boxes["Y"]
+check("  and the border matches the row's touch target",
+      tall_screen.zones.hit(selected_box[0] + 10, selected_box[1] + 10),
+      ("axis", "Y"))
+
+# A border overlapping the digits it surrounds would clip a column silently,
+# the driver clamping rather than complaining.
+for axis in AXES:
+    bx, by, bw, bh = tall_screen._axis_boxes[axis]
+    digits = tall_screen._positions[axis]
+    check("  the {} border clears its own digits".format(axis),
+          by + 2 <= digits.y and digits.y + 32 <= by + bh - 2, True)
+
 print("\nzone arithmetic")
 
 # Exercised directly, because the layout above only ever taps cell centres and
