@@ -95,14 +95,14 @@ FEED_MAX_MM_MIN = 5000.0
 # wind-down stutter, but hand turning is irregular detent to detent so the raw
 # figure jumps around and the motion feels rough. This damps a one-tick spike
 # while still following a real change within a few ticks - roughly 50 ms at 0.4.
-FEED_SMOOTHING = 0.4
+FEED_SMOOTHING = 0.25
 
 # Ceiling per step size, matching STEP_SIZES.
 #
 # A fine step is for placing the tool, not covering ground, so letting it reach
 # the machine's full rate just makes it twitchy to control. Each step gets a
 # ceiling suited to what it is for; the coarse step keeps the full range.
-STEP_MAX_FEED = (300.0, 800.0, 2000.0, 4000.0, 5000.0)
+STEP_MAX_FEED = (150.0, 300.0, 950.0, 4000.0, 5000.0)
 
 # Millimetres of motion allowed to be in flight at once.
 #
