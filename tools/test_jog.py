@@ -15,7 +15,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          QUEUE_MS, STEP_MAX_FEED, AXIS_MAX_FEED,
-                         FEED_DEADBAND)
+                         FEED_DEADBAND, FEED_BUILD_TRIM)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
 # test at a different step size.
@@ -187,8 +187,11 @@ sched.set_step_index(COARSE)
 for _ in range(SETTLE):
     enc.move(4 * 40)          # well past what the ceiling allows
     capped = sched.tick()
+# The ceiling is a bound on the target; the commanded feed may sit a trim below
+# it while the planner buffer is refilling.
+ceiling_x = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed is capped at the step's ceiling",
-      capped["feed"], min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"]), tol=5.0)
+      ceiling_x * FEED_BUILD_TRIM - 1 <= capped["feed"] <= ceiling_x + 1, True)
 
 # Z is far slower than X and Y here, so the ceiling has to follow the axis.
 enc, sched = new_scheduler(axis="Z")
@@ -197,7 +200,8 @@ for _ in range(SETTLE):
     enc.move(4 * 40)
     z_capped = sched.tick()
 check("Z is capped at its own lower ceiling",
-      z_capped["feed"], AXIS_MAX_FEED["Z"], tol=5.0)
+      AXIS_MAX_FEED["Z"] * FEED_BUILD_TRIM - 1 <= z_capped["feed"]
+      <= AXIS_MAX_FEED["Z"] + 1, True)
 
 # Out-turning the machine must drop the surplus, not bank it. Banking is what
 # made run-on grow the longer the pendant was used: every back-and-forth added
@@ -258,7 +262,18 @@ for _ in range(8):
         if message and message["t"] == "jog":
             feeds.append(message["feed"])
 settled = feeds[len(feeds) // 2:]               # ignore the opening ramp
-check("a steady hand produces a steady feed", len(set(settled)), 1)
+# The feed is no longer a single value: it is trimmed a few percent while the
+# planner buffer refills, and that trim toggles as the buffer crosses its
+# target. What matters is that the spread stays small - a few percent is a
+# velocity change the machine absorbs in milliseconds, where the tens of
+# percent it used to swing by is what stopped grblHAL blending.
+# Two things move the commanded feed by design: the deadband, which lets it sit
+# up to its width from the target before following, and the buffer trim. Their
+# sum is the most a steady hand should ever produce - against the tens of
+# percent it swung by when it was following every jitter.
+spread = (max(settled) - min(settled)) / max(settled)
+check("a steady hand produces a nearly steady feed",
+      spread <= FEED_DEADBAND + (1 - FEED_BUILD_TRIM) + 0.02, True)
 
 # It must still follow a genuine change of speed.
 for _ in range(RATE_WINDOW_TICKS * 2):
@@ -297,7 +312,7 @@ for _ in range(SETTLE):
     pinned = sched.tick()
 ceiling = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed reaches its ceiling rather than stalling short",
-      pinned["feed"], ceiling, tol=1.0)
+      ceiling * FEED_BUILD_TRIM - 1 <= pinned["feed"] <= ceiling + 1, True)
 
 # Reported from the machine: a dead stop, a slight pause, then a ramp back up,
 # about three times across a 49 inch traverse and twice as often at 0.5 mm.

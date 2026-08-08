@@ -219,8 +219,25 @@ QUEUE_MS = 300.0
 # Timed rather than measured: the queue is read after the tick's drain, so it
 # always presents at its trough and a measurement-driven version could never
 # tell a filling buffer from a full one.
-FEED_BUILD_TRIM = 0.80
-FEED_BUILD_TICKS = 5
+# Deliberately gentle. The trim toggles as the buffer crosses its target, so it
+# is a feed change - and feed changes are what stop grblHAL blending. At 20% the
+# toggle was a large step; at 5% it is 10 mm/s on a 200 mm/s move, which the
+# machine absorbs in under 7 ms. The buffer fills more slowly and nothing else
+# notices.
+FEED_BUILD_TRIM = 0.95
+
+# Buffer to keep in hand, as multiples of what the machine drains in a tick.
+#
+# The trace showed the queue reading exactly the distance emitted, every tick -
+# drained and refilled, with nothing in reserve. A tick that arrives light then
+# leaves the planner with nothing and the machine decelerates, which is the
+# stumble. Human turning varies by a third tick to tick, so dips are constant
+# and so were the stumbles.
+#
+# 1.5 ticks covers a dip of one full tick. It is also, directly, the run-on when
+# the wheel stops - buffer and coasting are the same quantity, so this is the
+# knob that trades one against the other.
+BUFFER_TICKS = 1.5
 
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
@@ -276,7 +293,7 @@ class JogScheduler:
         self.feed = FEED_MIN_MM_MIN   # last applied, for display
         self._queue_mm = 0.0          # estimate of motion in flight
         self._ticks_since_motion = 0  # interval used to measure turn rate
-        self._moving_ticks = 0        # ticks into the current burst
+        self._building = True         # buffer still filling
         self._cap_feed = FEED_MIN_MM_MIN  # untrimmed rate, for the emission cap
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
@@ -430,10 +447,16 @@ class JogScheduler:
         # difference. Emission stays at the full rate, so what is commanded and
         # what is executed differ by exactly the trim - and that difference is
         # the buffer.
-        if self._moving_ticks < FEED_BUILD_TICKS:
-            target *= FEED_BUILD_TRIM
-            if target < FEED_MIN_MM_MIN:
-                target = FEED_MIN_MM_MIN
+        # Under-feed whenever the buffer is below target, not just at the start
+        # of a burst. Building it once and never topping it up meant the first
+        # dip emptied it and it stayed empty - so the protection was gone
+        # exactly when the move had been going long enough to need it.
+        #
+        # The queue is read here after this tick's drain, so this is the buffer
+        # at its trough, which is the number that decides whether the planner
+        # runs dry.
+        wanted = (target / 60.0) * (TICK_MS / 1000.0) * BUFFER_TICKS
+        self._building = self._queue_mm < wanted
 
         # Smooth towards the target rather than jumping to it - but only while
         # already moving. Starting from rest, smoothing would ramp up from the
@@ -446,8 +469,18 @@ class JogScheduler:
 
         # Hold unless the target has left the band; otherwise take it exactly.
         if abs(target - self.feed) < self.feed * FEED_DEADBAND:
-            return self.feed
-        return target
+            settled = self.feed
+        else:
+            settled = target
+
+        # The trim goes on after the deadband. Applied before it, a change this
+        # small falls inside the band, is suppressed, and the buffer never
+        # fills - the trim has to reach the commanded feed to do anything.
+        if self._building:
+            settled *= FEED_BUILD_TRIM
+            if settled < FEED_MIN_MM_MIN:
+                settled = FEED_MIN_MM_MIN
+        return settled
 
     def tick(self):
         """Advance one interval. Returns a message to send, or None."""
@@ -497,7 +530,6 @@ class JogScheduler:
             # that also discarded most of the opening detents.
             self.feed = self.feed_rate(detents)
             self._moving = True
-            self._moving_ticks += 1
 
             # Cap what goes out at what the machine drains in a tick, which is
             # steady while the feed is steady.
@@ -514,10 +546,9 @@ class JogScheduler:
             # Emitting exactly the drain also leaves the queue where it is, so
             # the buffer built at the start of the burst stays put.
             # While building, emit at the untrimmed rate so the queue gains the
-            # difference. After that, emit exactly what the commanded feed
-            # drains, which holds the queue where the build put it.
-            cap = (self._cap_feed if self._moving_ticks <= FEED_BUILD_TICKS
-                   else self.feed)
+            # difference. Once at depth, emit exactly what the commanded feed
+            # drains, which holds it there.
+            cap = self._cap_feed if self._building else self.feed
             allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step)
             if allowed < 1:
                 allowed = 1
@@ -562,7 +593,6 @@ class JogScheduler:
             if self._idle_ticks >= IDLE_TICKS_BEFORE_CANCEL:
                 self._moving = False
                 self._idle_ticks = 0
-                self._moving_ticks = 0
                 self.stats["cancels"] += 1
                 return protocol.jog_cancel()
 
@@ -578,9 +608,15 @@ class JogScheduler:
 
         if len(self.trace) < TRACE_TICKS:
             return
+        # The planner stalls when the queue runs dry, not when a single tick
+        # carries less than usual - a dip the buffer absorbs is a non-event, and
+        # flagging those would bury the ones that matter.
+        drain = (self.feed / 60.0) * (TICK_MS / 1000.0)
+        if self._queue_mm > drain:
+            return
         recent = [row[2] for row in self.trace[:-1]]
         average = sum(recent) / len(recent)
-        if average <= 0 or carried >= average * TRACE_STUMBLE_RATIO:
+        if average <= 0:
             return
 
         self.stats["messages"] += 0          # no-op, keeps the counter honest
@@ -588,8 +624,8 @@ class JogScheduler:
         if self.stats["messages"] - self._last_dump < TRACE_QUIET_TICKS:
             return
         self._last_dump = self.stats["messages"]
-        print("[stumble {}] carried {:.2f} mm against an average of {:.2f}".format(
-            self.stumbles, carried, average))
+        print("[starved {}] queue {:.2f} mm, carried {:.2f} against an average of {:.2f}".format(
+            self.stumbles, self._queue_mm, carried, average))
         print("  feed  det   mm  queue")
         for feed, det, mm, queue in self.trace:
             print("  {:>5} {:>4} {:>5.2f} {:>5.1f}".format(feed, det, mm, queue))
