@@ -138,6 +138,19 @@ still runs, so the script is useful before you've picked a network.
 
 ## Wireless pendant (in progress)
 
+> **Quietening the pendant for machine work.** Set `TRACE_DUMP_BUDGET = 0` in
+> [`micropython/pendant/jog.py`](micropython/pendant/jog.py) to stop the trace
+> tables. Everything is still counted and still reported in the periodic
+> one-liner, so nothing is lost but the tables.
+>
+> It matters because printing can block. With no USB host attached MicroPython
+> discards console output, so a pendant running standalone from `main.py`
+> cannot stall on it however much it writes — but attached to `mpremote`, a
+> host that is not draining fast enough blocks `print()`, and a blocked print
+> blocks the whole event loop: the socket read and the jog scheduler with it.
+> A run with seventy trace dumps stalled the loop for a full second.
+
+
 A handheld MPG pendant — handwheel, buttons, display — that talks over WiFi to
 the **sender application**, not to the controller:
 

@@ -520,6 +520,42 @@ for _ in range(6):
     sched.tick()
 check("  and a pause mid-turn still lowers the feed", sched.feed < turning, True)
 
+import io  # noqa: E402
+from pendant import jog as _jog  # noqa: E402
+
+print("\ndiagnostic output")
+
+
+def dump_lines(budget, dumps=20):
+    """Lines printed by that many dumps at a given budget."""
+    saved = _jog.TRACE_DUMP_BUDGET
+    _jog.TRACE_DUMP_BUDGET = budget
+    try:
+        enc, sched = new_scheduler()
+        for _ in range(RATE_WINDOW_TICKS * 2):
+            enc.move(4 * 3)
+            sched.tick()
+        buffer = io.StringIO()
+        stdout, sys.stdout = sys.stdout, buffer
+        try:
+            for index in range(dumps):
+                sched.dump_trace("test {}".format(index))
+        finally:
+            sys.stdout = stdout
+        return len(buffer.getvalue().splitlines())
+    finally:
+        _jog.TRACE_DUMP_BUDGET = saved
+
+
+# Printing is what stalls the event loop: a blocked print on USB CDC blocks the
+# socket read and the jog scheduler with it. The budget has to actually bound
+# the output, not merely thin it.
+budgeted = dump_lines(6)
+check("the budget bounds what twenty dumps print", budgeted < 200, True)
+check("  and zero silences them entirely", dump_lines(0), 0)
+check("    while still counting", _jog.TRACE_DUMP_BUDGET >= 0, True)
+
+
 print("\nplanner depth regulation")
 
 # The controller reports free planner slots. Emission runs above the drain rate

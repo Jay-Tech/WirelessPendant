@@ -309,8 +309,21 @@ TRACE_TICKS = 24            # how much history to keep either side
 # Minimum gap between dumps, so one stall produces one dump rather than a
 # screenful. In ticks, but sized in time - at 100 it was five seconds at a
 # 50 ms tick and became two when the tick shortened.
-# Full table dumps allowed per session. After this the reason still prints as
-# one line and the counters keep counting, but the twenty-four rows stop.
+# Full table dumps allowed per session, or 0 to print nothing at all.
+#
+# Set this to 0 for machine work. Everything is still counted and still
+# reported in the periodic one-liner - collapses, stalls, dropped detents - so
+# nothing is lost except the tables, and the tables are only useful while
+# someone is reading them.
+#
+# Worth knowing why it matters only while tethered: with no USB host attached
+# MicroPython discards console output, so a pendant running standalone from
+# main.py cannot stall on printing however much it writes. Attached to
+# mpremote it can, which makes this a fault that only occurs while being
+# watched.
+#
+# After the budget the reason still prints as one line and the counters keep
+# counting, but the twenty-four rows stop.
 #
 # Printing is not free on this board: every line goes out over USB CDC, and if
 # the host is not draining as fast as the pendant writes, print() blocks - and
@@ -843,6 +856,8 @@ class JogScheduler:
         stopping: knowing an event still happens matters, and the table is what
         costs the time.
         """
+        if not TRACE_DUMP_BUDGET:
+            return
         self.dumps += 1
         if self.dumps > TRACE_DUMP_BUDGET:
             print("[trace] {} (table suppressed, {} dumps)".format(
