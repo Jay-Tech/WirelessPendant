@@ -52,12 +52,21 @@ DEFAULT_STEP_INDEX = 2
 # continuously produces a detent at least every ~300 ms even when crawling, so
 # anything quieter than that is a genuine stop.
 #
-# Raised from 300 ms after machine testing: turning deliberately slowly left
-# gaps longer than that, so it cancelled between individual detents - jog,
-# cancel, jog, cancel - which reads as the machine refusing to move. Bounding
-# the queue (below) is what makes a longer threshold safe: there is little
-# backlog left for a late cancel to have to flush.
-IDLE_MS_BEFORE_CANCEL = 600
+# Raised to 2.5 s after machine testing, in two stages.
+#
+# At 300 ms it cancelled between individual detents during deliberate slow
+# turning - jog, cancel, jog, cancel - which reads as the machine refusing to
+# move. At 600 ms it still fired whenever the operator re-gripped the wheel,
+# which a long traverse forces repeatedly: 49 inches is 12 revolutions at 1 mm
+# and 25 at 0.5 mm, and each pause produced a dead stop, a pause, then a ramp
+# back up. Three of them per traverse, twice as often at the finer step -
+# exactly the ratio of revolutions required.
+#
+# What makes a long threshold safe is that the cancel is now nearly redundant.
+# In-flight motion is bounded to a few ticks, so stopping the wheel stops the
+# machine within about 100 ms on its own. The cancel mattered when the queue
+# could grow without limit; now it is a safety net rather than the mechanism.
+IDLE_MS_BEFORE_CANCEL = 2500
 IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 
 # --- turn rate drives feed, not distance ----------------------------------
@@ -350,7 +359,8 @@ class JogScheduler:
         # Drain the in-flight estimate by what the machine executes in a tick at
         # the feed last commanded. Done every tick, including idle ones, so the
         # queue empties while the wheel is still.
-        self._queue_mm -= (self.feed / 60.0) * (TICK_MS / 1000.0)
+        drained = (self.feed / 60.0) * (TICK_MS / 1000.0)
+        self._queue_mm -= drained
         if self._queue_mm < 0:
             self._queue_mm = 0.0
 

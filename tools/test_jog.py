@@ -274,6 +274,28 @@ ceiling = min(STEP_MAX_FEED[COARSE], AXIS_MAX_FEED["X"])
 check("feed reaches its ceiling rather than stalling short",
       pinned["feed"], ceiling, tol=1.0)
 
+# Reported from the machine: a dead stop, a slight pause, then a ramp back up,
+# about three times across a 49 inch traverse and twice as often at 0.5 mm.
+#
+# That is the jog cancel firing while the operator re-grips the wheel. A
+# traverse needs 12 revolutions at 1 mm and 25 at 0.5 mm, which cannot be turned
+# without letting go, and each pause past the threshold flushed and stopped the
+# machine. The 2:1 ratio of occurrences matches the 2:1 ratio of revolutions.
+enc, sched = new_scheduler()
+sched.set_step_index(STEP_SIZES.index(0.5))
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(4 * 6)
+    sched.tick()
+regrip = [sched.tick() for _ in range(1000 // TICK_MS)]   # a second of stillness
+check("a pause to re-grip the wheel does not cancel",
+      [m for m in regrip if m], [])
+
+# A genuine stop still cancels, just later - and once, somewhere in the tail
+# rather than at its end, since the re-grip ticks already counted towards it.
+tail = [sched.tick() for _ in range(IDLE_TICKS_BEFORE_CANCEL)]
+check("  while a real stop still cancels",
+      [m for m in tail if m], [{"t": "jog_cancel"}])
+
 print("\nrest dither")
 
 # Observed on real hardware: a wheel coming to rest on a quadrature edge
