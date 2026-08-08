@@ -74,6 +74,12 @@ PIN_CS, PIN_DC, PIN_RST, PIN_BL = 17, 20, 21, 22
 SPI_BAUD = 20_000_000
 DISPLAY_REFRESH_MS = 100
 
+# A reported feed below this share of the commanded one, while the commanded
+# feed is meaningful, counts as the machine failing to hold what it was asked
+# for rather than simply moving slowly.
+FEED_COLLAPSE_RATIO = 0.5
+FEED_COLLAPSE_FLOOR = 500
+
 STATUS_REPORT_S = 15
 
 encoder = None
@@ -83,7 +89,7 @@ screen = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
-         "lag_enabled": True}
+         "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0}
 
 
 def on_message(message):
@@ -93,6 +99,18 @@ def on_message(message):
     wpos = message.get("wpos")
     state["dro"] = wpos
     state["machine_state"] = message.get("state", "?")
+
+    # What the controller says it is actually running at. A commanded feed that
+    # holds steady while this collapses to near zero and back is the planner
+    # executing one block at a time and decelerating at the end of each - the
+    # symptom the operator sees as 0 to 9000 and back, and the one thing no
+    # amount of pendant-side instrumentation could ever show.
+    actual = message.get("fr")
+    if actual is not None and scheduler is not None:
+        state["actual_feed"] = actual
+        commanded = scheduler.feed
+        if commanded > FEED_COLLAPSE_FLOOR and actual < commanded * FEED_COLLAPSE_RATIO:
+            state["feed_collapses"] += 1
 
     # Everything below here is diagnostic. It runs inside the receive loop, so
     # anything it raises would kill the session and present as a link that will
@@ -306,10 +324,11 @@ async def report():
         dropped = scheduler.stats["dropped_detents"]
         kept = 100 * sent // (sent + dropped) if (sent + dropped) else 100
         link.log(
-            "{} | axis {} step {} F{:.0f} | {} | detents={} dropped={} ({}% kept)"
-            " lag={:.1f}/{:.1f}mm err={}".format(
+            "{} | axis {} step {} F{:.0f}/act{} collapse={} | {} | detents={}"
+            " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm err={}".format(
                 "up" if pendant_link.connected else "DOWN",
-                scheduler.axis, scheduler.step, scheduler.feed, position,
+                scheduler.axis, scheduler.step, scheduler.feed,
+                state["actual_feed"], state["feed_collapses"], position,
                 sent, dropped, kept,
                 state["lag_mm"], state["peak_lag_mm"], encoder.errors))
 

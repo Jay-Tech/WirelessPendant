@@ -112,6 +112,7 @@ class MockSender:
             "wpos": [round(self.position[a], 3) for a in AXES],
             "fro": self.feed_override,
             "sro": self.spindle_override,
+            "fr": int(self.feed_override),
         }
 
     def dro_line(self):
