@@ -173,17 +173,33 @@ class DroScreen:
         #
         # Anchored to the bottom, so a taller panel gives its extra height to
         # the middle rather than stranding the status off the edge.
+        # Laid out bottom-up, each region placed against the one below it.
+        #
+        # Positioning two regions independently from opposite ends is what
+        # broke this: the corner was measured from the panel bottom while the
+        # step grid was measured downward from the status text, so dropping the
+        # status from three rows to two moved the grid 24 px and drove it
+        # through the corner - which then drew inside the 1.0 cell.
         link_y = self.display.height - 22
         state_y = link_y - STATUS_PITCH
+        status_bottom = link_y + self._small.height
+
+        # The corner shares the status band's bottom edge, so it lines up with
+        # the link text rather than floating a few pixels above it.
+        page_y = status_bottom - PAGE_ZONE_H
+        zones_top = (page_y - ZONE_MARGIN) - (ZONE_ROW_H * 2 + ZONE_GAP)
 
         # A tall panel earns a step grid; a short one gives its height to the
         # position rows and keeps the physical step buttons.
-        rows_min = TOP_MARGIN + len(AXES) * ROW_PITCH
-        self._zones_shown = (state_y - rows_min) >= MIN_ZONE_SPACE
+        # Room only counts if the grid still leaves the position rows their
+        # minimum pitch. Below that the grid is dropped entirely.
+        self._zones_shown = zones_top >= TOP_MARGIN + len(AXES) * ROW_PITCH
 
         if self._zones_shown:
-            zones_top = state_y - ZONE_MARGIN - (ZONE_ROW_H * 2 + ZONE_GAP)
-            pitch = (zones_top - TOP_MARGIN - ZONE_MARGIN) // len(AXES)
+            # Rows tile the whole span down to the grid, so the two meet
+            # instead of leaving a band of empty panel between the last
+            # border and the first cell.
+            pitch = (zones_top - TOP_MARGIN) // len(AXES)
         else:
             zones_top = None
             pitch = ROW_PITCH
@@ -200,16 +216,22 @@ class DroScreen:
             # 27 px above the bottom - fine while the row was only a readout,
             # and obviously wrong the moment it gained a border to sit inside.
             top = TOP_MARGIN + row * pitch
-            box = (0, top, self.display.width, pitch)
+            # Integer division leaves up to two pixels over; the last row takes
+            # them, so the bottom border lands on the grid rather than a
+            # hairline above it.
+            height = pitch
+            if self._zones_shown and row == len(AXES) - 1:
+                height = zones_top - top
+            box = (0, top, self.display.width, height)
 
             label = Field(self.display, self._medium, 4,
-                          top + (pitch - self._medium.height) // 2, 1,
+                          top + (height - self._medium.height) // 2, 1,
                           color=GREY)
             label.set(axis)
             self._labels[axis] = label
             self._positions[axis] = Field(
                 self.display, self._big, DIGITS_X,
-                top + (pitch - self._big.height) // 2, DIGITS)
+                top + (height - self._big.height) // 2, DIGITS)
 
             # The whole row is the target, not just the label. It is already
             # the thing that highlights to show what the wheel will move, so
@@ -250,7 +272,6 @@ class DroScreen:
         # geometry is settled and reserved rather than being retrofitted around
         # whatever lands here later.
         if self._zones_shown:
-            page_y = self.display.height - PAGE_ZONE_H - 8
             page_box = (PAGE_ZONE_X, page_y,
                         self.display.width - PAGE_ZONE_X, PAGE_ZONE_H)
             self._draw_border(page_box, False)

@@ -157,7 +157,10 @@ check("position rows spread to fill the extra height", tall_pitch > ROW_PITCH,
       True)
 check("  giving each row a fingertip-sized target",
       tall_pitch / PX_PER_MM >= 9.0, True)
-check("  and they stay evenly spaced", tall_rows[2] - tall_rows[1], tall_pitch)
+# Within a pixel: the last row absorbs the rounding left by integer division
+# so the boxes reach the grid exactly, which shifts its centred digits by one.
+check("  and they stay evenly spaced",
+      abs((tall_rows[2] - tall_rows[1]) - tall_pitch) <= 2, True)
 
 right, bottom = extent(tall)
 check("still nothing past the right edge", right <= 320, True)
@@ -194,6 +197,28 @@ for row in STEP_ROWS:
 for index, axis in enumerate(AXES):
     check("  tapping the {} row selects it".format(axis),
           tall_screen.zones.hit(160, tall_rows[index] + 10), ("axis", axis))
+
+# The regions have to tile. Positioning two of them independently from
+# opposite ends is what put the corner inside the 1.0 cell: the grid was
+# measured downward from the status text and the corner upward from the panel
+# edge, so changing the status row count moved one and not the other.
+last_box = tall_screen._axis_boxes[AXES[-1]]
+first_cell = min(tall_screen._zone_fields.values(), key=lambda b: b[1])
+check("  the position rows meet the step grid with no gap",
+      first_cell[1] - (last_box[1] + last_box[3]), 0)
+
+grid_bottom = max(y + h for _, y, _, h in tall_screen._zone_fields.values())
+page = [z for z in tall_screen.zones._zones if z[0] == "page"][0]
+page_top, page_bottom = page[2], page[4]
+check("  and the grid clears the corner", grid_bottom <= page_top, True)
+check("    with the corner clear of every cell",
+      all(page[1] >= zx + zw or page_top >= zy + zh
+          for zx, zy, zw, zh in tall_screen._zone_fields.values()), True)
+
+# Lining up with the link text is what makes the corner look deliberate
+# rather than floating.
+check("  the corner's bottom edge matches the link text",
+      page_bottom, tall_screen._link.y + 16)
 
 # The corner is reserved whether or not anything acts on it yet, so whatever
 # lands there later inherits settled geometry instead of being retrofitted
