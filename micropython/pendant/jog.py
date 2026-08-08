@@ -23,7 +23,23 @@ except ImportError:
     from pendant import protocol
 
 
-# 10 Hz. Raised from 50 Hz, then from 20 Hz, after machine testing.
+# 20 Hz. Was 50, then 20, then 10, now back to 20 - and the reason has changed.
+#
+# It was lowered to stop flooding the controller, which was a problem of too
+# much distance. That is now bounded separately by the emission cap, and the
+# constraint that remains is the opposite one: grblHAL decelerates to a stop at
+# the end of the last block in its planner, so holding a feed needs several
+# blocks queued ahead. Sending ten blocks a second while the machine executes
+# ten a second means one or two are ever outstanding.
+#
+# The machine showed this exactly. At F9000 a 15 ms tick carries 15 mm, and at
+# 1500 mm/s^2 reaching 150 mm/s takes 7.5 mm and stopping takes 7.5 mm - so a
+# 15 mm block is precisely accelerate-then-decelerate, touching the commanded
+# feed for an instant and averaging around 6000. Hence a console reading 9000
+# while the machine dips to 4000.
+#
+# Shorter blocks do not fix that alone; more of them queued does, and shorter
+# blocks are how the same buffer measured in time becomes more blocks.
 #
 # The binding constraint turned out not to be this scheduler at all. At 20 Hz
 # the machine reported a kept ratio falling from 79% to 31% across one traverse,
@@ -44,7 +60,7 @@ except ImportError:
 #
 # The latency cost is nil in practice: the sender dispatches its own jogs every
 # 75 ms, so this was never the limiting quantiser.
-TICK_MS = 100
+TICK_MS = 50
 
 # Quadrature edges per detent, matching the decoder.
 COUNTS_PER_DETENT = 4
@@ -211,11 +227,13 @@ FEED_BUILD_TRIM = 0.95
 # stumble. Human turning varies by a third tick to tick, so dips are constant
 # and so were the stumbles.
 #
-# 1.5 ticks covers a dip of one full tick. It is also, directly, the run-on when
+# Four ticks, which at a 50 ms tick is 200 ms - the same buffer in time as
+# before, now spread across four blocks instead of one and a half. That is what
+# gives the planner something to look ahead at. It is also, directly, the run-on when
 # the wheel stops - buffer and coasting are the same quantity, so this is the
 # knob that trades one against the other, and it is the only bound on in-flight
 # motion now that the regulator holds the depth.
-BUFFER_TICKS = 1.5
+BUFFER_TICKS = 4.0
 
 # Hysteresis on the refill decision, as a fraction of the target either side.
 #
