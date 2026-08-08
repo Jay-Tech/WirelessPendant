@@ -180,8 +180,17 @@ STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 # follow cannot be honoured - the choice is only between lagging and dropping,
 # and a pendant that saves motion to replay after you stop is far worse than one
 # that simply stops keeping up.
-# In-flight motion is bounded to this many ticks' worth of travel at the
-# current feed, rather than to a fixed distance.
+# In-flight motion is bounded to this many milliseconds of travel at the current
+# feed, rather than to a fixed distance or a number of ticks.
+#
+# Milliseconds, not ticks, because this is directly how far the machine coasts
+# after the wheel stops - and expressing it in ticks tied it to TICK_MS. Raising
+# the tick from 20 ms to 100 ms silently multiplied the run-on fivefold, to half
+# a second of travel: 100 mm at F12000, which is what "too much run off" was.
+#
+# It is also the planner's buffer, so it cannot go too small either. Below about
+# a tick and a half there is nothing left to absorb arrival jitter and the
+# planner starves. This is the knob that trades run-on against smoothness.
 #
 # A constant is wrong because what it means changes with speed. At 1500 mm/s^2,
 # stopping from F15000 takes 20.8 mm and from F1000 takes 0.09 mm - so 3 mm was
@@ -193,27 +202,65 @@ STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 # tick and what drains are nearly equal, so a tight bound tips in and out of
 # dropping on small variations and the resulting irregular distances are felt as
 # roughness of their own.
-QUEUE_TICKS = 5.0
+QUEUE_MS = 200.0
 
-# Depth of in-flight motion the planner should be kept supplied with, as a
-# fraction of the bound above.
+# Ceiling per step size, matching STEP_SIZES.
 #
-# Commanding exactly the arrival rate leaves the queue hovering at zero: the
-# machine consumes distance as fast as it is delivered, so there is no buffer to
-# absorb the jitter of whole detents and the planner runs dry on any short tick.
-# Below this depth the feed is trimmed so the machine consumes slightly slower
-# than the wheel delivers, and a buffer establishes itself. Above it the feed is
-# exactly the arrival rate again, so distance stays true.
-QUEUE_TARGET_FRACTION = 0.5
+# The fine values are measured on the machine rather than derived - they came
+# out roughly a third of what seemed reasonable on paper, which says a fine step
+# wants control far more than speed.
+#
+# The coarse ones now run to the machine's real limit, because anything less
+# throws away turning the operator is actually doing. Measured on the machine at
+# roughly 4 rev/s - 400 detents/s - the demand is step x 400 x 60:
+#
+#   0.5 mm -> 12000 mm/min, which X and Y can deliver in full
+#   1.0 mm -> 24000 mm/min, which nothing can, so 1 mm sheds ~38% at that speed
+#
+# So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
+# only fully usable below about 250 detents/s. That is a property of the wheel
+# and the machine, not something a ceiling can fix.
+STEP_MAX_FEED = (150.0, 300.0, 950.0, 12000.0, 15000.0)
 
-# How much the feed is trimmed while the buffer is still filling.
+# Millimetres of motion allowed to be in flight at once.
 #
-# Deliberately one-sided. A two-sided regulator was tried and reverted: nudging
-# the feed to hold a depth means the feed moves continuously, and a feed that
-# moves is precisely what stops grblHAL blending consecutive moves - trading the
-# starvation fault for the jerking one. Correcting only upwards keeps the feed
-# still once the buffer is established, which is the property that matters.
-FEED_BUILD_TRIM = 0.85
+# This is, directly, how far the machine can still travel after the wheel stops.
+# The scheduler tracks an estimate of the queue - adding what it commands,
+# subtracting what the current feed drains each tick - and refuses to add beyond
+# this.
+#
+# Bounding accumulated distance rather than per-tick distance matters: a single
+# quick tick is harmless and must not be clipped, while sustained over-turning
+# is exactly what banked up unboundedly and made run-on grow the longer the
+# pendant was used.
+#
+# The surplus is dropped, not deferred. Turning faster than the machine can
+# follow cannot be honoured - the choice is only between lagging and dropping,
+# and a pendant that saves motion to replay after you stop is far worse than one
+# that simply stops keeping up.
+# In-flight motion is bounded to this many milliseconds of travel at the current
+# feed, rather than to a fixed distance or a number of ticks.
+#
+# Milliseconds, not ticks, because this is directly how far the machine coasts
+# after the wheel stops - and expressing it in ticks tied it to TICK_MS. Raising
+# the tick from 20 ms to 100 ms silently multiplied the run-on fivefold, to half
+# a second of travel: 100 mm at F12000, which is what "too much run off" was.
+#
+# It is also the planner's buffer, so it cannot go too small either. Below about
+# a tick and a half there is nothing left to absorb arrival jitter and the
+# planner starves. This is the knob that trades run-on against smoothness.
+#
+# A constant is wrong because what it means changes with speed. At 1500 mm/s^2,
+# stopping from F15000 takes 20.8 mm and from F1000 takes 0.09 mm - so 3 mm was
+# simultaneously negligible at traverse and a large overshoot while creeping.
+# Expressed in ticks it becomes a bounded amount of *time*, about 60 ms of
+# motion, which is what the operator perceives as run-on.
+#
+# Five rather than three: at a coarse step near the ceiling, what arrives each
+# tick and what drains are nearly equal, so a tight bound tips in and out of
+# dropping on small variations and the resulting irregular distances are felt as
+# roughness of their own.
+QUEUE_MS = 200.0
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
@@ -359,8 +406,16 @@ class JogScheduler:
         if not self.feed_tracking:
             return FEED_MAX_MM_MIN
 
-        # Exactly the rate being commanded - no more, except while the planner
-        # buffer is still filling.
+        # Exactly the rate being commanded - no more.
+        #
+        # A trim below the arrival rate while a buffer filled was tried and
+        # removed. It could not tell a filling buffer from a full one, because
+        # the queue is measured after the tick's drain and so always reads at its
+        # trough - so the trim never released and the feed sat permanently under
+        # the arrival rate, which is the direction that grows a backlog. The
+        # smoothest run observed on the machine was one where a ceiling was
+        # binding, and a bound feed is a constant feed regardless of any of
+        # this.
         #
         # Feeding faster than commanded is not free, which an earlier version
         # got wrong. Distance per detent is fixed, so a higher feed does not
@@ -376,13 +431,6 @@ class JogScheduler:
         # does the same thing - feed straight from encoder velocity, with no
         # curve above it.
         target = self.turn_rate(detents) * self.step * 60.0
-
-        # While the buffer is shallow, consume a little slower than the wheel
-        # delivers so it can fill. Once at depth the feed is exactly the arrival
-        # rate and holds still, which is what lets the planner blend.
-        bound = (target / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
-        if self._queue_mm < bound * QUEUE_TARGET_FRACTION:
-            target *= FEED_BUILD_TRIM
 
         ceiling = STEP_MAX_FEED[self.step_index]
         axis_ceiling = AXIS_MAX_FEED.get(self.axis, FEED_MAX_MM_MIN)
@@ -459,7 +507,7 @@ class JogScheduler:
             # Refuse to put more in flight than MAX_QUEUE_MM. The surplus is
             # dropped rather than carried in the residual, which would only
             # defer the same overshoot to the next tick.
-            max_queue = (self.feed / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
+            max_queue = (self.feed / 60.0) * (QUEUE_MS / 1000.0)
             room = max_queue - self._queue_mm
             allowed = int(room / self.step)
             if allowed < 1:

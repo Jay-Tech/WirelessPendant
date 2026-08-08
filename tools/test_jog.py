@@ -14,7 +14,7 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
-                         QUEUE_TICKS, STEP_MAX_FEED, AXIS_MAX_FEED,
+                         QUEUE_MS, STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
@@ -202,7 +202,7 @@ check("Z is capped at its own lower ceiling",
 # Out-turning the machine must drop the surplus, not bank it. Banking is what
 # made run-on grow the longer the pendant was used: every back-and-forth added
 # more than the machine drained, and none of it paused long enough to cancel.
-bound = (sched.feed / 60.0) * (TICK_MS / 1000.0) * QUEUE_TICKS
+bound = (sched.feed / 60.0) * (QUEUE_MS / 1000.0)
 check("in-flight distance is bounded, so run-on cannot grow",
       sched._queue_mm <= bound + 1e-9, True)
 check("  and the dropped detents are counted",
