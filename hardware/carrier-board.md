@@ -129,6 +129,14 @@ breadboard.
 `SDO/MISO` and `SD_CS` stay unconnected - the panel is written to, never read,
 and the SD slot is unused.
 
+**The display could run at 3V3, and should not.** LCDWiki document the module as
+accepting either, but note that a 3.3 V input cannot hold a full 3.3 V on the
+regulator's output, and the backlight - transistor-driven from the LED pin -
+dims as a result. Dropping the display to 3V3 would leave the encoder as the
+only 5 V load at about 30 mA and shrink the boost to something trivial, which is
+tempting until you are reading a DRO at the machine under shop lighting. Not a
+trade worth one fewer part.
+
 ### Touch — I2C1
 
 | Pin | Signal |
