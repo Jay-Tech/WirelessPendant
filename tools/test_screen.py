@@ -331,6 +331,13 @@ _headings = {op: label for op, label, _ in PROBE_OPS}
 check("    and the two tool references read differently",
       _headings["tlr"] != _headings["tlr_setter"], True)
 
+# @59.3 comes first: it is the common setup, done straight after a tool change
+# while still standing at the machine, which is the round trip the pendant
+# exists to remove.
+_order = [op for op, _, _ in PROBE_OPS]
+check("  the setter reference is listed above the local one",
+      _order.index("tlr_setter") < _order.index("tlr"), True)
+
 # A menu with no visible exit is one the operator power-cycles out of.
 check("  there is a way back to the DRO",
       probe_screen.zones.hit(280, 480 - 20), ("page", "dro"))

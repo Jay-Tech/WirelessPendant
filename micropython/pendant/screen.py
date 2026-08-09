@@ -107,8 +107,10 @@ PROBE_OPS = (
     # SETTER earns its place on a handheld despite the traverse: a tool change
     # happens at the machine, and walking back to the screen to start the
     # reference is exactly the round trip this pendant exists to remove.
-    ("tlr", "TLR Here", None),
+    # @59.3 first: it is the common setup. A tool change ends at the machine,
+    # and this is the one done straight afterwards.
     ("tlr_setter", "TLR @59.3", None),
+    ("tlr", "TLR Here", None),
 )
 PROBE_ROW_H = 88
 

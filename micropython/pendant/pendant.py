@@ -92,6 +92,11 @@ TOUCH_POLL_MS = 30
 # wake-up has to be before it is worth reporting. 100 ms is five scheduler
 # ticks - long enough that a busy tick does not trip it, short enough to catch
 # a stall well before the link's 10 s deadline gives up.
+# Zone kinds that respond to a touch-and-hold. Everything else selects on the
+# tap and ignores a hold, so the progress bar stays hidden over them rather
+# than promising a gesture that will not fire.
+HOLD_TARGETS = ("probe",)
+
 WATCHDOG_MS = 100
 STALL_WARN_MS = 100
 
@@ -136,7 +141,7 @@ state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
          "planner_min": 999, "planner_max": 0, "bf_warned": False,
-         "stalls": 0, "worst_stall_ms": 0}
+         "stalls": 0, "worst_stall_ms": 0, "hold_target": False}
 
 
 def on_message(message):
@@ -421,16 +426,23 @@ async def watch_touch():
             if event is not None:
                 kind = event[0]
                 if kind == "progress":
-                    # Fed straight to the screen so a hold shows itself
-                    # filling. Without it a gesture that takes most of a second
-                    # looks like one that is not registering, and the operator
-                    # lets go and tries again - the opposite of what a
-                    # deliberate gesture should encourage.
-                    if screen is not None:
+                    # Only where a hold means something. The bar filling is a
+                    # promise that holding will do something, and on the DRO
+                    # page it will not - selection there is a tap, because axis
+                    # and step are reversible and waiting 800 ms to change one
+                    # twice would be tedious. Showing the bar anyway invites
+                    # the operator to wait for a gesture that page does not
+                    # have, which is how it read as broken.
+                    if screen is not None and state["hold_target"]:
                         screen.set_hold_progress(event[1])
                 elif screen is not None:
                     screen.set_hold_progress(0.0)
                     hit = screen.zones.hit(event[1], event[2])
+                    # Recorded on the press, because a progress event carries
+                    # only a fraction - by then there is nothing to look up.
+                    if kind == "tap":
+                        state["hold_target"] = (hit is not None
+                                                and hit[0] in HOLD_TARGETS)
                     if hit is not None:
                         handle_touch(kind, hit[0], hit[1])
         except Exception as exc:
