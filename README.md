@@ -136,6 +136,61 @@ Six stages, each reporting PASS / FAIL / SKIP with a summary at the end:
 The last three need `secrets.py`; without it they report SKIP and the rest
 still runs, so the script is useful before you've picked a network.
 
+## Pendant hardware summary
+
+Everything the pendant needs, in one place. The reasoning behind each choice is
+in the sections that follow; this is the part you need with a soldering iron in
+your hand.
+
+**Discrete parts: two resistors.** Nothing else is needed between the Pico 2 W
+and the peripherals — no level shifters, no pull-ups, no transistors. The
+encoder's 22 kΩ pair is the whole passive BOM, and the touch module does its own
+level conversion on board.
+
+| Pin | Net | Notes |
+|---|---|---|
+| GP2 | encoder A | via 22 kΩ to GND — see the encoder section |
+| GP3 | encoder B | via 22 kΩ to GND |
+| GP7 | feed hold | to GND, internal pull-up |
+| GP8 | cycle start | to GND, internal pull-up |
+| GP9 | zero axis | to GND, internal pull-up, long hold |
+| GP10 | CTP_SDA | touch I²C |
+| GP11 | CTP_SCL | touch I²C |
+| GP12 | CTP_INT | read, not used as an interrupt |
+| GP13 | CTP_RST | active low |
+| GP17 | LCD_CS | |
+| GP18 | SCK | shared SPI0 |
+| GP19 | SDI / MOSI | shared SPI0 |
+| GP20 | LCD_RS | the DC line |
+| GP21 | LCD_RST | |
+| GP22 | LED | backlight; leave open and it stays on |
+| VBUS | encoder Vcc, display VCC | **5 V, not 3V3** |
+| GND | encoder 0V, display GND | |
+
+Free: **GP0, GP1, GP4–GP6, GP14–GP16, GP26–GP28**. GP4–GP6 came free when axis
+and step selection moved to the touch panel, and GP26–GP28 are the ADC-capable
+ones — the obvious home for a battery divider.
+
+Unconnected on the display module: `SDO/MISO` and `SD_CS`. The pendant never
+reads from the panel and does not use the SD slot.
+
+**Both peripherals want 5 V.** The encoder is specified at 5 V, and the display
+regulates its own 3.3 V on board — its manual is explicit that feeding it 3.3 V
+leaves that rail short and dims the backlight. Logic stays at 3.3 V throughout:
+the encoder is divided down, and the touch I²C is level converted on the module.
+
+**Bringing a rebuilt harness up**, one layer at a time rather than all at once:
+
+```bash
+python tools/on_board.py micropython/pendant/probe_encoder.py      # characterise A/B
+python tools/on_board.py micropython/pendant/selftest_quadrature.py
+python tools/on_board.py micropython/pendant/selftest_st7796.py    # backlight, then pixels
+python tools/on_board.py micropython/pendant/selftest_touch.py     # bus, then part, then touches
+python tools/on_board.py micropython/pendant/selftest_link.py
+```
+
+Each separates the failures the one above it would otherwise mask.
+
 ## Wireless pendant (in progress)
 
 > **Quietening the pendant for machine work.** Set `TRACE_DUMP_BUDGET = 0` in
