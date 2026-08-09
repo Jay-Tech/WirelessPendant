@@ -181,6 +181,17 @@ def on_message(message):
             link.log("  unknown, so motion will be rougher. Enable the")
             link.log("  buffer-state bit in $10 (add 2) and restart.")
 
+    # The sender's probe state: which corner it will use, and whether a cycle
+    # is already running. Shown on the probe page so a hold never fires at a
+    # target only visible on a screen behind you.
+    probe_state = message.get("probe")
+    if probe_state is not None and screen is not None:
+        try:
+            screen.set_probe_state(probe_state.get("corner", "?"),
+                                   bool(probe_state.get("busy")))
+        except Exception:
+            pass
+
     actual = message.get("fr")
     if actual is not None and scheduler is not None:
         state["actual_feed"] = actual
@@ -376,15 +387,20 @@ def handle_touch(kind, target, value):
             scheduler.set_step(value)
             link.log("step -> {} mm".format(value))
         elif target == "page":
-            link.log("page tapped - nothing bound to it yet")
+            # The DRO is page 0 and the one to come back to: a pendant left on
+            # a menu does not show where the machine is.
+            screen.show_page(0 if value == "dro" else 1)
         return
 
-    if kind == "hold":
-        # Reserved for the probe page. Logged rather than ignored so the
-        # gesture is demonstrably reaching a target: a hold that silently does
-        # nothing is indistinguishable from one the panel never registered.
-        link.log("held {} {} - nothing bound to a hold yet".format(
-            target, value))
+    if kind == "hold" and target == "probe":
+        if pendant_link is None or not pendant_link.connected:
+            link.log("probe {} ignored - no link to the sender".format(value))
+            return
+        # The pendant asks; the sender decides. It holds the parameters, knows
+        # whether a job is running, and is the only side that can refuse for a
+        # reason the operator would recognise.
+        pendant_link.send(protocol.probe(value))
+        link.log("probe {} requested".format(value))
 
 
 async def watch_touch():

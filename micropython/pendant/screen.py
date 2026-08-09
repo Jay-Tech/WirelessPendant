@@ -75,6 +75,19 @@ HOLD_BAR_H = 6
 # is used without looking. Three across is 16.5 mm.
 STEP_ROWS = ((0.001, 0.01, 0.1), (0.5, 1.0))
 
+# The probe page. Each entry is (operation, label), and every one is
+# hold-to-fire: these drive the tool at the work, so a tap must not start one.
+#
+# Only operations that are "position the tool, then probe" - which is the part
+# the pendant is for. Centre finding stays on the sender, where the bore or
+# boss selection that decides what it does is visible.
+PROBE_OPS = (
+    ("z", "PROBE Z"),
+    ("corner", "PROBE CORNER"),
+    ("tlr", "TOOL REF"),
+)
+PROBE_ROW_H = 92
+
 # The bottom band: status text on the left, the paging corner on the right.
 # Sized to match a step-grid row, so the panel reads as one stack of equal
 # bands rather than a layout with an offcut at the bottom.
@@ -171,9 +184,38 @@ class DroScreen:
         self.zones = Zones()
         self._hold_width = 0
         self._step = None
+        # Which page is showing. The DRO is page 0 and the one the pendant
+        # returns to, because a pendant left on a menu is a pendant that does
+        # not show where the machine is.
+        self.page = 0
+        self._probe_corner = "?"
+        self._probe_busy = False
         self._axis = None
         self._axis_boxes = {}
         self.build()
+
+    def show_page(self, page):
+        """Switch pages and repaint. Page 0 is the DRO, page 1 the probe menu."""
+        if page == self.page:
+            return
+        self.page = page
+        self.build()
+
+    def set_probe_state(self, corner, busy):
+        """The sender's corner selection and whether a cycle is running.
+
+        Shown rather than chosen. Which corner a probe uses lives in the sender
+        and there is no reason for a second copy here - but firing a cycle
+        whose target is only visible on a screen behind you is exactly the
+        thing that made the shared probe parameters unsafe, so it has to be
+        readable at the machine.
+        """
+        if corner == self._probe_corner and busy == self._probe_busy:
+            return
+        self._probe_corner = corner
+        self._probe_busy = busy
+        if self.page == 1:
+            self.build()
 
     def build(self):
         """Paint the layout and reset every field.
@@ -184,6 +226,12 @@ class DroScreen:
         back through the screen for its SPI bus and pin numbers.
         """
         self.display.fill(BLACK)
+        self._hold_width = 0
+        self.zones.clear()
+
+        if self.page == 1:
+            self._build_probe_page()
+            return
 
         # Laid out bottom-up, every region flush against the one below it.
         #
@@ -323,6 +371,64 @@ class DroScreen:
         self.set_state("?")
         self.set_mode("?", 0.0, 0.0)
         self.set_link(False)
+
+    def _build_probe_page(self):
+        """The probe menu: one full-width target per operation, plus a way back.
+
+        Full width and 92 px tall - 14 mm - because these are the targets you
+        reach for while looking at a stylus rather than at the screen, and they
+        are the only ones on this pendant that move a tool at a workpiece.
+        """
+        width = self.display.width
+        y = TOP_MARGIN
+
+        header = Field(self.display, self._small, 8, 6, 24, color=GREY,
+                       align="left")
+        header.set("HOLD TO RUN")
+
+        self._probe_fields = {}
+        for operation, label in PROBE_OPS:
+            box = (0, y, width, PROBE_ROW_H)
+            self._draw_border(box, False)
+
+            text = label
+            if operation == "corner":
+                # The corner the sender will actually use. Naming it here is
+                # the whole reason this is readable at the machine rather than
+                # only on a screen behind you.
+                text = "{} {}".format(label, self._probe_corner)
+
+            field = Field(self.display, self._medium, 12,
+                          y + (PROBE_ROW_H - self._medium.height) // 2,
+                          len(text), color=WHITE if not self._probe_busy else DIM,
+                          align="left")
+            field.set(text)
+            self._probe_fields[operation] = field
+
+            # Nothing is armed while a cycle is running. A second probe started
+            # into a moving machine is the failure worth refusing outright.
+            if not self._probe_busy:
+                self.zones.add("probe", 0, y, width, PROBE_ROW_H, operation)
+            y += PROBE_ROW_H
+
+        status = "PROBING..." if self._probe_busy else "tap below to go back"
+        Field(self.display, self._small, 8, y + 12, len(status),
+              color=AMBER if self._probe_busy else GREY,
+              align="left").set(status)
+
+        # The way back, in the same corner the way here was. A menu with no
+        # visible exit is one the operator power-cycles out of.
+        back_h = BOTTOM_BAND_H
+        back_y = self.display.height - back_h
+        back_box = (PAGE_ZONE_X, back_y, width - PAGE_ZONE_X, back_h)
+        self._draw_border(back_box, False)
+        self.zones.add("page", back_box[0], back_box[1], back_box[2],
+                       back_box[3], "dro")
+        label = "DRO"
+        Field(self.display, self._small,
+              back_box[0] + (back_box[2] - len(label) * self._small.width) // 2,
+              back_y + (back_h - self._small.height) // 2,
+              len(label), color=GREY).set(label)
 
     def _build_step_zones(self, top):
         """Draw the step grid and register each cell as it is drawn."""

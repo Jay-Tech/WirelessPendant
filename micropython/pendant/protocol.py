@@ -43,6 +43,7 @@ T_JOG_CANCEL = "jog_cancel"
 T_BUTTON = "btn"
 T_ZERO = "zero"
 T_MODE = "mode"
+T_PROBE = "probe"
 T_PING = "ping"
 
 # Sender -> pendant
@@ -103,6 +104,29 @@ def mode(axis, step):
     operator is looking.
     """
     return {"t": T_MODE, "axis": axis, "step": step}
+
+
+# Probe operations the pendant may ask for. Named rather than numbered so a
+# mismatch between the two sides fails as an unknown operation the sender can
+# name, rather than as the wrong cycle running.
+PROBE_Z = "z"
+PROBE_CORNER = "corner"
+PROBE_TOOL_REFERENCE = "tlr"
+
+
+def probe(operation):
+    """Ask the sender to run a probe cycle.
+
+    Only operations that make sense standing at the machine: a Z touch, a
+    corner, and a tool length reference at the current position. Each is
+    "position the tool, then probe" - which is the part the pendant is for.
+
+    Deliberately carries no parameters. The sender owns those, per operation,
+    and the pendant showing its own copy would be a second answer to a question
+    that already has one - the same mistake as the shared rates that let a
+    corner setup quietly rewrite the tool reference's numbers.
+    """
+    return {"t": T_PROBE, "op": operation}
 
 
 def ping(seq):

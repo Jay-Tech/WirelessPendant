@@ -42,7 +42,8 @@ sys.modules.setdefault("ili9341", _ili9341)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
 from pendant.screen import (DroScreen, AXES, STATUS_PITCH,  # noqa: E402
-                            ROW_PITCH, STEP_ROWS, PAGE_ZONE_X)
+                            ROW_PITCH, STEP_ROWS, PAGE_ZONE_X,
+                            PROBE_OPS, PROBE_ROW_H)
 from pendant.jog import STEP_SIZES  # noqa: E402
 from pendant.screen import Zones  # noqa: E402
 
@@ -298,6 +299,46 @@ for _axis in AXES:
 _r, _b = extent(tall)
 check("  and nothing at all is drawn past the panel",
       _r <= 320 and _b <= 480, True)
+
+print("\nprobe page")
+
+probe_display = FakeDisplay(320, 480)
+probe_screen = DroScreen(probe_display)
+probe_screen.show_page(1)
+
+# Every probe target is hold-to-fire and every one drives a tool at a
+# workpiece, so they are the largest targets on the pendant - reached while
+# looking at a stylus rather than at the screen.
+for _index, (_op, _label) in enumerate(PROBE_OPS):
+    check("  the {} target is armed".format(_op),
+          probe_screen.zones.hit(160, 20 + _index * PROBE_ROW_H + 10),
+          ("probe", _op))
+check("  and they clear a fingertip generously",
+      PROBE_ROW_H / PX_PER_MM >= 12.0, True)
+
+# A menu with no visible exit is one the operator power-cycles out of.
+check("  there is a way back to the DRO",
+      probe_screen.zones.hit(280, 480 - 20), ("page", "dro"))
+
+# Nothing is armed while a cycle is running. A second probe started into a
+# moving machine is worth refusing outright rather than arbitrating.
+probe_screen.set_probe_state("FrontLeft", True)
+check("  nothing is armed while probing", probe_screen.zones.hit(160, 30), None)
+check("    but the way back stays",
+      probe_screen.zones.hit(280, 480 - 20), ("page", "dro"))
+
+probe_screen.set_probe_state("FrontLeft", False)
+check("  and they re-arm when it finishes",
+      probe_screen.zones.hit(160, 30), ("probe", "z"))
+
+# Switching back restores the DRO, zones and all.
+probe_screen.show_page(0)
+check("  returning to the DRO restores its zones",
+      probe_screen.zones.hit(160, 30), ("axis", "X"))
+
+right, bottom = extent(probe_display)
+check("  nothing on the probe page leaves the panel",
+      right <= 320 and bottom <= 480, True)
 
 print("\nzone arithmetic")
 
