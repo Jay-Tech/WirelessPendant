@@ -54,6 +54,36 @@ Both rails come from the switched DEVICE output, so they rise and fall together.
 That matters: a 5 V encoder feeding dividers into an unpowered Pico would push
 current through its protection diodes.
 
+### The Amigo Pro is not on this board
+
+It is a 36 x 23 x 7 mm module that lives in the case. The carrier's entire
+interface to it is **two wires, VDEV and GND**, into a 2-pin connector. Design
+the enclosure around the module, not the board around the module.
+
+It brings more out than its connectors suggest, and three of those change the
+enclosure rather than the carrier:
+
+| Interface | Use |
+|---|---|
+| DEVICE JST-PH, or the VDEV pad | 3.0-4.2 V into the carrier |
+| BATTERY JST-PH, or the VBAT pad | the cell |
+| **SW header** | external momentary on/off switch |
+| **LED headers** | external charge and status indicators |
+| USB-C | the only way power gets in |
+
+So the power button is a **fourth panel-mount button**, wired to the Amigo's SW
+header rather than to the Pico. It does not appear anywhere in the firmware and
+needs no GPIO. The status LED wants a position on the case too.
+
+**Align the module's own USB-C with a case cutout.** There is no alternative
+power injection - USB-C is the only input - so a second receptacle on the
+carrier would have to be wired back to the module's own connector pins, which is
+a poor mechanical joint in something handheld. One cutout, no extra parts, no CC
+resistors.
+
+The battery charges with the output switched off, so the pendant can sit on the
+charger overnight while turned off, which is the way it will actually be used.
+
 ### Sizing the boost
 
 Estimates, worth confirming with a meter before ordering:
@@ -173,6 +203,10 @@ Level converted on the touch module, so 3.3 V logic is safe against it.
 Panel-mount rather than PCB tactile: this is handled with gloves, with chips
 about, and a panel button is the more robust part. Axis and step selection are
 on the touch panel and need no pins.
+
+There is a **fourth** panel-mount button, for power, but it belongs to the Amigo
+Pro's SW header and touches neither this board nor the firmware. Worth counting
+when laying out the case.
 
 **No E-stop on this board.** Feed hold and cycle start over WiFi are fine -
 worst case they are late. An E-stop that depends on an associated radio link is
