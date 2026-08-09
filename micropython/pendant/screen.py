@@ -95,9 +95,22 @@ CORNER_DETAIL = "$corner"
 PROBE_OPS = (
     ("z", "PROBE Z", None),
     ("corner", "PROBE CORNER", CORNER_DETAIL),
-    ("tlr", "TOOL REF", "at this position"),
+    # Two tool references, on separate rows rather than one row with a mode.
+    #
+    # They move very differently: Here descends from wherever the tool is put,
+    # so the operator chose what is underneath it, while @59.3 traverses across
+    # the machine to a stored coordinate first. One row that could be either
+    # would leave a line of small text as the only thing separating a descent
+    # from a traverse, which is too much weight for it to carry - so the
+    # difference is in the heading, where it is read first and largest.
+    #
+    # SETTER earns its place on a handheld despite the traverse: a tool change
+    # happens at the machine, and walking back to the screen to start the
+    # reference is exactly the round trip this pendant exists to remove.
+    ("tlr", "TLR Here", None),
+    ("tlr_setter", "TLR @59.3", None),
 )
-PROBE_ROW_H = 92
+PROBE_ROW_H = 88
 
 # The probe rows start below the hold bar and the page heading, not at
 # TOP_MARGIN. At 20 the heading sat under the hold bar and the first row's
@@ -495,12 +508,6 @@ class DroScreen:
                 self.zones.add("probe", 0, y, width, PROBE_ROW_H, operation)
             y += PROBE_ROW_H
 
-        status = "PROBING..." if self._probe_busy else "tap DRO to go back"
-        Field(self.display, self._small, 8, y + 10,
-              self._fits(status, self._small),
-              color=AMBER if self._probe_busy else GREY,
-              align="left").set(status)
-
         # The way back, in the same corner the way here was. A menu with no
         # visible exit is one the operator power-cycles out of.
         back_h = BOTTOM_BAND_H
@@ -514,6 +521,15 @@ class DroScreen:
               back_box[0] + (back_box[2] - len(label) * self._small.width) // 2,
               back_y + (back_h - self._small.height) // 2,
               len(label), color=GREY).set(label)
+
+        # Whether a cycle is running, in the band beside the way out. It used
+        # to sit under the last row; with four rows there is no room there, and
+        # the band is where the eye already goes for state.
+        if self._probe_busy:
+            Field(self.display, self._small, 8,
+                  back_y + (back_h - self._small.height) // 2,
+                  self._fits("PROBING...", self._small),
+                  color=AMBER, align="left").set("PROBING...")
 
     def _fits(self, text, glyphs, x=14):
         """Cells for `text`, bounded by what the panel can actually show.

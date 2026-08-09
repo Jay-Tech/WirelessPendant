@@ -113,6 +113,11 @@ PROBE_Z = "z"
 PROBE_CORNER = "corner"
 PROBE_TOOL_REFERENCE = "tlr"
 
+# Distinct from PROBE_TOOL_REFERENCE, not a flag on it. One descends from
+# wherever the tool is; the other traverses to a stored coordinate first, and
+# two motions that different should not share a name.
+PROBE_TOOL_REFERENCE_AT_SETTER = "tlr_setter"
+
 
 def probe(operation):
     """Ask the sender to run a probe cycle.

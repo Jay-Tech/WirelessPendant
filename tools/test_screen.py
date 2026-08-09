@@ -316,6 +316,21 @@ for _index, (_op, _label, _qualifier) in enumerate(PROBE_OPS):
 check("  and they clear a fingertip generously",
       PROBE_ROW_H / PX_PER_MM >= 12.0, True)
 
+# Every operation the page offers must be one the sender knows. A row that
+# sends an operation the sender cannot map is a target that holds, fills its
+# bar, and does nothing - and the pendant has no way to find out.
+_known = {"z", "corner", "tlr", "tlr_setter"}
+check("  every target names an operation the sender handles",
+      {op for op, _, _ in PROBE_OPS} <= _known, True)
+
+# The two tool references get separate rows because they move differently: one
+# descends from where the tool was left, the other traverses to a stored
+# coordinate first. Distinguished in the heading rather than a qualifier, so
+# the difference is read first and largest.
+_headings = {op: label for op, label, _ in PROBE_OPS}
+check("    and the two tool references read differently",
+      _headings["tlr"] != _headings["tlr_setter"], True)
+
 # A menu with no visible exit is one the operator power-cycles out of.
 check("  there is a way back to the DRO",
       probe_screen.zones.hit(280, 480 - 20), ("page", "dro"))
