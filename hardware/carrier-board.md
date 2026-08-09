@@ -129,6 +129,20 @@ breadboard.
 `SDO/MISO` and `SD_CS` stay unconnected - the panel is written to, never read,
 and the SD slot is unused.
 
+**Place both the 2.54 mm header and the 14-pin FPC footprint.** The module
+brings the same fourteen signals out on either, and unpopulated pads cost
+nothing. Which one gets fitted is a mechanical decision that cannot be made
+until the outline exists: a stacked 2.54 mm pair is about 8.5 mm plus
+clearance, against 1-2 mm for an FPC connector whose cable also flexes, so the
+carrier no longer has to sit rigidly behind the panel. On a handheld that is
+most of a centimetre of depth.
+
+Populate the header first. FPC has three ways to cost a board revision that a
+0.1 inch header does not - the pitch is 0.5 mm or 1.0 mm and the footprints are
+not interchangeable, cables come with contacts on the same or opposite sides at
+each end, and connectors come in top and bottom contact. Two of those three
+mirror the pinout silently.
+
 **The display could run at 3V3, and should not.** LCDWiki document the module as
 accepting either, but note that a 3.3 V input cannot hold a full 3.3 V on the
 regulator's output, and the backlight - transistor-driven from the LED pin -
