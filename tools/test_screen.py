@@ -309,7 +309,7 @@ probe_screen.show_page(1)
 # Every probe target is hold-to-fire and every one drives a tool at a
 # workpiece, so they are the largest targets on the pendant - reached while
 # looking at a stylus rather than at the screen.
-for _index, (_op, _label) in enumerate(PROBE_OPS):
+for _index, (_op, _label, _qualifier) in enumerate(PROBE_OPS):
     check("  the {} target is armed".format(_op),
           probe_screen.zones.hit(160, PROBE_TOP + _index * PROBE_ROW_H + 10),
           ("probe", _op))
@@ -343,7 +343,7 @@ check("  nothing on the probe page leaves the panel",
 # And per field, because an extent check says something overflowed without
 # saying what. At 24 px a character is 24 px wide, so thirteen fill the panel:
 # "PROBE CORNER FrontLeft" on one line came to 528.
-for _op, _label in PROBE_OPS:
+for _op, _label, _qualifier in PROBE_OPS:
     _f = probe_screen._probe_fields[_op]
     check("  the {} label fits the panel".format(_op),
           _f.x + _f.length * _f.glyphs.width <= 320, True)

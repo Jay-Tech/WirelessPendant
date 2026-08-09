@@ -81,10 +81,21 @@ STEP_ROWS = ((0.001, 0.01, 0.1), (0.5, 1.0))
 # Only operations that are "position the tool, then probe" - which is the part
 # the pendant is for. Centre finding stays on the sender, where the bore or
 # boss selection that decides what it does is visible.
+# Each entry is (operation, heading, qualifier). The qualifier is the second
+# line, and CORNER_DETAIL means "substitute whichever corner the sender has
+# selected" rather than a literal.
+#
+# Every heading carries one where it would otherwise be ambiguous. "TOOL REF"
+# alone read as the only tool reference there is, and there are two: this one
+# probes where the machine stands, the other drives to G59.3 first. Watching a
+# straight downward touch and concluding it had run a Z probe is exactly what
+# the missing qualifier invited.
+CORNER_DETAIL = "$corner"
+
 PROBE_OPS = (
-    ("z", "PROBE Z"),
-    ("corner", "PROBE CORNER"),
-    ("tlr", "TOOL REF"),
+    ("z", "PROBE Z", None),
+    ("corner", "PROBE CORNER", CORNER_DETAIL),
+    ("tlr", "TOOL REF", "at this position"),
 )
 PROBE_ROW_H = 92
 
@@ -442,7 +453,7 @@ class DroScreen:
               align="left").set("HOLD TO RUN")
 
         self._probe_fields = {}
-        for operation, label in PROBE_OPS:
+        for operation, label, qualifier in PROBE_OPS:
             box = (0, y, width, PROBE_ROW_H)
             self._draw_border(box, False)
             colour = DIM if self._probe_busy else WHITE
@@ -453,7 +464,8 @@ class DroScreen:
             # It sits against the bottom border rather than under the label,
             # so the row reads as a heading with a qualifier beneath it. Packed
             # together in the middle they looked like one wrapped line.
-            detail = self._probe_corner if operation == "corner" else None
+            detail = (self._probe_corner if qualifier == CORNER_DETAIL
+                      else qualifier)
             top = (y + PROBE_LABEL_TOP if detail
                    else y + (PROBE_ROW_H - self._medium.height) // 2)
 
@@ -465,12 +477,17 @@ class DroScreen:
 
             if detail:
                 detail_y = y + PROBE_ROW_H - 2 - PROBE_DETAIL_GAP                     - self._small.height
-                self._probe_detail = Field(
+                field = Field(
                     self.display, self._small, 14, detail_y,
-                    self._fits(self._probe_corner, self._small),
-                    color=AMBER if not self._probe_busy else DIM,
+                    self._fits(detail, self._small),
+                    color=(AMBER if qualifier == CORNER_DETAIL else GREY)
+                    if not self._probe_busy else DIM,
                     align="left")
-                self._probe_detail.set(detail)
+                field.set(detail)
+                # Only the corner's is kept: it is the one the sender changes
+                # under us, and the only one worth repainting in place.
+                if qualifier == CORNER_DETAIL:
+                    self._probe_detail = field
 
             # Nothing is armed while a cycle is running. A second probe started
             # into a moving machine is the failure worth refusing outright.
