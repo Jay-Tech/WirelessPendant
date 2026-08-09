@@ -88,6 +88,11 @@ PROBE_OPS = (
 )
 PROBE_ROW_H = 92
 
+# The probe rows start below the hold bar and the page heading, not at
+# TOP_MARGIN. At 20 the heading sat under the hold bar and the first row's
+# border ran through it.
+PROBE_TOP = 32
+
 # The bottom band: status text on the left, the paging corner on the right.
 # Sized to match a step-grid row, so the panel reads as one stack of equal
 # bands rather than a layout with an offcut at the bottom.
@@ -378,32 +383,44 @@ class DroScreen:
         Full width and 92 px tall - 14 mm - because these are the targets you
         reach for while looking at a stylus rather than at the screen, and they
         are the only ones on this pendant that move a tool at a workpiece.
+
+        Every label here is sized against the panel rather than written and
+        hoped for. At 24 px a character is 24 px wide, so thirteen of them fill
+        a 320 px screen: "PROBE CORNER FrontLeft" on one line came to 528, and
+        the driver clamps rather than complaining, so it rendered as a torn
+        diagonal instead of an error.
         """
         width = self.display.width
-        y = TOP_MARGIN
+        y = PROBE_TOP
 
-        header = Field(self.display, self._small, 8, 6, 24, color=GREY,
-                       align="left")
-        header.set("HOLD TO RUN")
+        Field(self.display, self._small, 8, 12, 11, color=GREY,
+              align="left").set("HOLD TO RUN")
 
         self._probe_fields = {}
         for operation, label in PROBE_OPS:
             box = (0, y, width, PROBE_ROW_H)
             self._draw_border(box, False)
+            colour = DIM if self._probe_busy else WHITE
 
-            text = label
-            if operation == "corner":
-                # The corner the sender will actually use. Naming it here is
-                # the whole reason this is readable at the machine rather than
-                # only on a screen behind you.
-                text = "{} {}".format(label, self._probe_corner)
+            # The corner goes on a second line at the smaller glyph. Appended
+            # to the label it was more than twice the panel width.
+            detail = self._probe_corner if operation == "corner" else None
+            text_h = self._medium.height + (self._small.height + 4 if detail
+                                            else 0)
+            top = y + (PROBE_ROW_H - text_h) // 2
 
-            field = Field(self.display, self._medium, 12,
-                          y + (PROBE_ROW_H - self._medium.height) // 2,
-                          len(text), color=WHITE if not self._probe_busy else DIM,
+            field = Field(self.display, self._medium, 12, top,
+                          self._fits(label, self._medium), color=colour,
                           align="left")
-            field.set(text)
+            field.set(label)
             self._probe_fields[operation] = field
+
+            if detail:
+                Field(self.display, self._small, 14,
+                      top + self._medium.height + 4,
+                      self._fits(detail, self._small),
+                      color=AMBER if not self._probe_busy else DIM,
+                      align="left").set(detail)
 
             # Nothing is armed while a cycle is running. A second probe started
             # into a moving machine is the failure worth refusing outright.
@@ -411,8 +428,9 @@ class DroScreen:
                 self.zones.add("probe", 0, y, width, PROBE_ROW_H, operation)
             y += PROBE_ROW_H
 
-        status = "PROBING..." if self._probe_busy else "tap below to go back"
-        Field(self.display, self._small, 8, y + 12, len(status),
+        status = "PROBING..." if self._probe_busy else "tap DRO to go back"
+        Field(self.display, self._small, 8, y + 10,
+              self._fits(status, self._small),
               color=AMBER if self._probe_busy else GREY,
               align="left").set(status)
 
@@ -429,6 +447,16 @@ class DroScreen:
               back_box[0] + (back_box[2] - len(label) * self._small.width) // 2,
               back_y + (back_h - self._small.height) // 2,
               len(label), color=GREY).set(label)
+
+    def _fits(self, text, glyphs, x=14):
+        """Cells for `text`, bounded by what the panel can actually show.
+
+        A Field wider than the panel does not fail: the driver clamps each blit
+        to the edge, so the overflow lands in the wrong column and the line
+        renders as a torn diagonal. Bounding the length here turns that into a
+        truncation, which is at least legible and obviously wrong.
+        """
+        return min(len(text), (self.display.width - x) // glyphs.width)
 
     def _build_step_zones(self, top):
         """Draw the step grid and register each cell as it is drawn."""

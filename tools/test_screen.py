@@ -43,7 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
 from pendant.screen import (DroScreen, AXES, STATUS_PITCH,  # noqa: E402
                             ROW_PITCH, STEP_ROWS, PAGE_ZONE_X,
-                            PROBE_OPS, PROBE_ROW_H)
+                            PROBE_OPS, PROBE_ROW_H, PROBE_TOP)
 from pendant.jog import STEP_SIZES  # noqa: E402
 from pendant.screen import Zones  # noqa: E402
 
@@ -311,7 +311,7 @@ probe_screen.show_page(1)
 # looking at a stylus rather than at the screen.
 for _index, (_op, _label) in enumerate(PROBE_OPS):
     check("  the {} target is armed".format(_op),
-          probe_screen.zones.hit(160, 20 + _index * PROBE_ROW_H + 10),
+          probe_screen.zones.hit(160, PROBE_TOP + _index * PROBE_ROW_H + 10),
           ("probe", _op))
 check("  and they clear a fingertip generously",
       PROBE_ROW_H / PX_PER_MM >= 12.0, True)
@@ -323,22 +323,35 @@ check("  there is a way back to the DRO",
 # Nothing is armed while a cycle is running. A second probe started into a
 # moving machine is worth refusing outright rather than arbitrating.
 probe_screen.set_probe_state("FrontLeft", True)
-check("  nothing is armed while probing", probe_screen.zones.hit(160, 30), None)
+check("  nothing is armed while probing",
+      probe_screen.zones.hit(160, PROBE_TOP + 10), None)
 check("    but the way back stays",
       probe_screen.zones.hit(280, 480 - 20), ("page", "dro"))
 
 probe_screen.set_probe_state("FrontLeft", False)
 check("  and they re-arm when it finishes",
-      probe_screen.zones.hit(160, 30), ("probe", "z"))
+      probe_screen.zones.hit(160, PROBE_TOP + 10), ("probe", "z"))
+
+# Measured while the probe page is still drawn. This check existed before and
+# passed while the page was overflowing by 200 px, because it ran after
+# switching back and FakeDisplay.fill clears the record - so it was measuring
+# the DRO. A test that reports on the wrong screen is worse than no test.
+right, bottom = extent(probe_display)
+check("  nothing on the probe page leaves the panel",
+      (right, bottom) <= (320, 480), True)
+
+# And per field, because an extent check says something overflowed without
+# saying what. At 24 px a character is 24 px wide, so thirteen fill the panel:
+# "PROBE CORNER FrontLeft" on one line came to 528.
+for _op, _label in PROBE_OPS:
+    _f = probe_screen._probe_fields[_op]
+    check("  the {} label fits the panel".format(_op),
+          _f.x + _f.length * _f.glyphs.width <= 320, True)
 
 # Switching back restores the DRO, zones and all.
 probe_screen.show_page(0)
 check("  returning to the DRO restores its zones",
       probe_screen.zones.hit(160, 30), ("axis", "X"))
-
-right, bottom = extent(probe_display)
-check("  nothing on the probe page leaves the panel",
-      right <= 320 and bottom <= 480, True)
 
 print("\nzone arithmetic")
 
