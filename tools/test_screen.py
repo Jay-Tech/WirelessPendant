@@ -391,6 +391,18 @@ check("  and the DRO shows them again on return",
       probe_screen._positions["X"]._shown.strip(), "11.111")
 check("    including the state", probe_screen._state._shown.strip(), "Run")
 
+# Coming back has to redraw the selection, not just remember it. Both _axis and
+# _step track what was last drawn; only _axis was being cleared, so the step
+# cell stayed selected and stopped looking selected.
+probe_screen.show_page(0)
+probe_screen.set_mode("Y", 0.5, 1000.0)
+probe_screen.show_page(1)
+probe_screen.show_page(0)
+probe_screen.set_mode("Y", 0.5, 1000.0)
+check("  the step highlight is redrawn after a page swap",
+      probe_screen._step, 0.5)
+check("    and the axis highlight with it", probe_screen._axis, "Y")
+
 probe_screen.show_page(1)
 
 # Switching back restores the DRO, zones and all.

@@ -318,7 +318,12 @@ class DroScreen:
         self.zones.clear()
         self._hold_width = 0
         self._axis_boxes = {}
+        # Both cleared, because both track what was last drawn and build() has
+        # just drawn nothing. _axis was reset here and _step was not, so after
+        # a page swap the selected step stayed selected but stopped looking
+        # selected - the highlight decided nothing had changed and skipped it.
         self._axis = None
+        self._step = None
         self._labels = {}
         self._positions = {}
         for row, axis in enumerate(AXES):
