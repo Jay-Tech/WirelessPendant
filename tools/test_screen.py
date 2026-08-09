@@ -348,6 +348,31 @@ for _op, _label in PROBE_OPS:
     check("  the {} label fits the panel".format(_op),
           _f.x + _f.length * _f.glyphs.width <= 320, True)
 
+# A corner change repaints the corner, not the panel. build() starts with a
+# full fill, so rebuilding for nine characters flashed the whole screen black -
+# which on a page whose targets start a probe reads as something going wrong.
+probe_display.fills = 0
+probe_screen.set_probe_state("BackRight", False)
+check("  a corner change does not repaint the panel", probe_display.fills, 0)
+check("    but does update the corner shown",
+      probe_screen._probe_detail._shown.strip(), "BackRight")
+
+# Busy changes which targets are armed and how every row draws, so that one
+# does rebuild - at a moment when a repaint is expected rather than startling.
+probe_display.fills = 0
+probe_screen.set_probe_state("BackRight", True)
+check("  a busy change does repaint", probe_display.fills, 1)
+
+probe_screen.set_probe_state("FrontLeft", False)
+
+# The corner name sits against the row's bottom border rather than under the
+# heading: packed together in the middle they read as one wrapped line.
+_row_bottom = PROBE_TOP + 2 * PROBE_ROW_H
+_detail = probe_screen._probe_detail
+check("  the corner name sits above the row border",
+      _row_bottom - 24 <= _detail.y + 16 <= _row_bottom - 2, True)
+check("    and is left-aligned", _detail.align, "left")
+
 # Switching back restores the DRO, zones and all.
 probe_screen.show_page(0)
 check("  returning to the DRO restores its zones",

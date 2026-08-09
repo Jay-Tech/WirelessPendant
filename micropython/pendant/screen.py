@@ -93,6 +93,12 @@ PROBE_ROW_H = 92
 # border ran through it.
 PROBE_TOP = 32
 
+# Where a two-line target's heading sits, and how far its qualifier clears the
+# row's bottom border. The qualifier goes against the border rather than under
+# the heading: packed together in the middle they read as one wrapped line.
+PROBE_LABEL_TOP = 16
+PROBE_DETAIL_GAP = 8
+
 # The bottom band: status text on the left, the paging corner on the right.
 # Sized to match a step-grid row, so the panel reads as one stack of equal
 # bands rather than a layout with an offcut at the bottom.
@@ -195,6 +201,7 @@ class DroScreen:
         self.page = 0
         self._probe_corner = "?"
         self._probe_busy = False
+        self._probe_detail = None
         self._axis = None
         self._axis_boxes = {}
         self.build()
@@ -215,12 +222,30 @@ class DroScreen:
         thing that made the shared probe parameters unsafe, so it has to be
         readable at the machine.
         """
-        if corner == self._probe_corner and busy == self._probe_busy:
+        corner_changed = corner != self._probe_corner
+        busy_changed = busy != self._probe_busy
+        if not corner_changed and not busy_changed:
             return
+
         self._probe_corner = corner
         self._probe_busy = busy
-        if self.page == 1:
-            self.build()
+        if self.page != 1:
+            return
+
+        # A corner change repaints the corner, not the panel. build() begins
+        # with a full fill, so rebuilding for nine characters flashed the whole
+        # screen black - which on a page whose targets start a probe reads as
+        # something having gone wrong.
+        if corner_changed and not busy_changed and self._probe_detail:
+            self._probe_detail.length = self._fits(corner, self._small)
+            self._probe_detail.invalidate()
+            self._probe_detail.set(corner)
+            return
+
+        # Busy changes which targets are armed and how every row is drawn, so
+        # that one does rebuild. It happens when a cycle starts or ends, where
+        # a repaint is expected rather than startling.
+        self.build()
 
     def build(self):
         """Paint the layout and reset every field.
@@ -404,10 +429,13 @@ class DroScreen:
 
             # The corner goes on a second line at the smaller glyph. Appended
             # to the label it was more than twice the panel width.
+            #
+            # It sits against the bottom border rather than under the label,
+            # so the row reads as a heading with a qualifier beneath it. Packed
+            # together in the middle they looked like one wrapped line.
             detail = self._probe_corner if operation == "corner" else None
-            text_h = self._medium.height + (self._small.height + 4 if detail
-                                            else 0)
-            top = y + (PROBE_ROW_H - text_h) // 2
+            top = (y + PROBE_LABEL_TOP if detail
+                   else y + (PROBE_ROW_H - self._medium.height) // 2)
 
             field = Field(self.display, self._medium, 12, top,
                           self._fits(label, self._medium), color=colour,
@@ -416,11 +444,13 @@ class DroScreen:
             self._probe_fields[operation] = field
 
             if detail:
-                Field(self.display, self._small, 14,
-                      top + self._medium.height + 4,
-                      self._fits(detail, self._small),
-                      color=AMBER if not self._probe_busy else DIM,
-                      align="left").set(detail)
+                detail_y = y + PROBE_ROW_H - 2 - PROBE_DETAIL_GAP                     - self._small.height
+                self._probe_detail = Field(
+                    self.display, self._small, 14, detail_y,
+                    self._fits(self._probe_corner, self._small),
+                    color=AMBER if not self._probe_busy else DIM,
+                    align="left")
+                self._probe_detail.set(detail)
 
             # Nothing is armed while a cycle is running. A second probe started
             # into a moving machine is the failure worth refusing outright.
