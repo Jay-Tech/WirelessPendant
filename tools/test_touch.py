@@ -129,8 +129,12 @@ result = device.poll()
 check("  and a resting finger does not tap again",
       result is None or result[0] == "progress", True)
 
+# A release has to be reported so the hold bar can clear. Noticing it silently
+# left a part-filled bar on screen until the next touch redrew it, which reads
+# as the pendant still waiting on a gesture that ended long ago.
 panel.point = None
-check("  releasing reports nothing", device.poll(), None)
+check("  releasing resets the hold progress", device.poll(), ("progress", 0.0))
+check("    and stays quiet afterwards", device.poll(), None)
 
 print("\nhold")
 
@@ -166,6 +170,17 @@ event = device.poll()
 check("sliding off the target abandons it", event, ("progress", 0.0))
 clock.sleep_ms(HOLD_MS)
 check("  and it cannot then fire", device.poll(), None)
+
+# Lifting off part-way through is the other way a hold ends, and the commoner
+# one. It has to clear the bar just as sliding away does.
+device, panel, clock = new_touch()
+panel.point = (100, 300)
+device.poll()
+clock.sleep_ms(HOLD_MS // 2)
+check("lifting off part-way reports progress",
+      device.poll()[0], "progress")
+panel.point = None
+check("  and releasing clears it", device.poll(), ("progress", 0.0))
 
 # But a finger resting for the best part of a second wanders, and demanding it
 # stay perfectly still would make the gesture feel broken.

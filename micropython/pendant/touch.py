@@ -136,9 +136,17 @@ class Touch:
 
         touching = (data[0] & 0x0F) > 0
         if not touching:
+            released = self._down
             self._down = False
             self._held = False
             self._down_point = None
+            # A release has to be reported, not just noticed. Nothing else
+            # tells the screen the gesture is over, so a bar left part-filled
+            # sat there until the next touch happened to redraw it - which
+            # reads as the pendant still waiting on a hold that was abandoned
+            # a minute ago.
+            if released:
+                return "progress", 0.0
             return None
 
         x = ((data[1] & 0x0F) << 8) | data[2]
