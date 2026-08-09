@@ -355,6 +355,38 @@ def start_display():
         return None
 
 
+def handle_touch(kind, target, value):
+    """Act on a tap or a hold that landed inside a zone.
+
+    Taps select; holds do things. Selection is reversible and wants to feel
+    immediate, so it fires on contact - while anything that drives the tool at
+    the work waits for 800 ms of deliberate contact, the same as the physical
+    zero button. One convention for "this one is consequential", rather than a
+    different gesture depending on which surface the control lives on.
+    """
+    if kind == "tap":
+        if target == "axis" and value != scheduler.axis:
+            # Changing axis mid-motion has to flush what is queued, or the old
+            # axis keeps running on after the operator has moved on.
+            cancel = scheduler.set_axis(value)
+            if cancel and pendant_link:
+                pendant_link.send(cancel)
+            link.log("axis -> {}".format(value))
+        elif target == "step":
+            scheduler.set_step(value)
+            link.log("step -> {} mm".format(value))
+        elif target == "page":
+            link.log("page tapped - nothing bound to it yet")
+        return
+
+    if kind == "hold":
+        # Reserved for the probe page. Logged rather than ignored so the
+        # gesture is demonstrably reaching a target: a hold that silently does
+        # nothing is indistinguishable from one the panel never registered.
+        link.log("held {} {} - nothing bound to a hold yet".format(
+            target, value))
+
+
 async def watch_touch():
     """Turn taps into axis and step selections.
 
@@ -369,28 +401,22 @@ async def watch_touch():
 
     while True:
         try:
-            point = touch.poll()
-            if point is not None:
-                hit = screen.zones.hit(point[0], point[1])
-                if hit is not None:
-                    kind, value = hit
-                    if kind == "axis" and value != scheduler.axis:
-                        # Changing axis mid-motion has to flush what is queued,
-                        # or the old axis keeps running on after the operator
-                        # has moved on. set_axis returns that cancel.
-                        cancel = scheduler.set_axis(value)
-                        if cancel and pendant_link:
-                            pendant_link.send(cancel)
-                        link.log("axis -> {}".format(value))
-                    elif kind == "step":
-                        scheduler.set_step(value)
-                        link.log("step -> {} mm".format(value))
-                    elif kind == "page":
-                        # Reserved, not yet wired. Logged rather than ignored
-                        # so the target is demonstrably live - a corner that
-                        # silently does nothing is indistinguishable from one
-                        # whose hit box is in the wrong place.
-                        link.log("page tapped - nothing bound to it yet")
+            event = touch.poll()
+            if event is not None:
+                kind = event[0]
+                if kind == "progress":
+                    # Fed straight to the screen so a hold shows itself
+                    # filling. Without it a gesture that takes most of a second
+                    # looks like one that is not registering, and the operator
+                    # lets go and tries again - the opposite of what a
+                    # deliberate gesture should encourage.
+                    if screen is not None:
+                        screen.set_hold_progress(event[1])
+                elif screen is not None:
+                    screen.set_hold_progress(0.0)
+                    hit = screen.zones.hit(event[1], event[2])
+                    if hit is not None:
+                        handle_touch(kind, hit[0], hit[1])
         except Exception as exc:
             # A touch fault must not take the pendant down. The wheel and the
             # link are the parts that matter; selection is a convenience.

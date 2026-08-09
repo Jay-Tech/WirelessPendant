@@ -59,6 +59,10 @@ DIGITS_X = 28
 DIGITS = 9
 TOP_MARGIN = 20
 
+# Height of the hold-progress bar along the top edge. It sits inside the top
+# margin, so it costs no layout - the rows already start below it.
+HOLD_BAR_H = 6
+
 # Step sizes as touch targets, laid out row by row.
 #
 # Must cover jog.STEP_SIZES exactly - a step reachable by button but not by
@@ -165,6 +169,7 @@ class DroScreen:
         # place. A hit box that has drifted from its label is invisible: the
         # screen simply ignores you.
         self.zones = Zones()
+        self._hold_width = 0
         self._step = None
         self._axis = None
         self._axis_boxes = {}
@@ -223,6 +228,7 @@ class DroScreen:
         link_y = state_y + status_pitch
 
         self.zones.clear()
+        self._hold_width = 0
         self._axis_boxes = {}
         self._axis = None
         self._labels = {}
@@ -376,6 +382,29 @@ class DroScreen:
             if was or now:
                 self._draw_zone(box[0], box[1], box[2], box[3], value, now)
         self._step = step
+
+    def set_hold_progress(self, fraction):
+        """Show how far a touch-and-hold has got, 0.0 to 1.0.
+
+        A bar along the top edge rather than on the target itself. Drawing over
+        the target would mean repainting whatever it holds every frame, and the
+        bar has to be cheap: this is called at the touch poll rate, which is
+        three times the display rate.
+
+        Redrawn only when the width actually changes by a visible amount. At
+        30 Hz an unfiltered version repaints the same pixels thirty times a
+        second and competes with the DRO for the SPI bus.
+        """
+        width = int(self.display.width * min(max(fraction, 0.0), 1.0))
+        if abs(width - self._hold_width) < 4 and not (width == 0 < self._hold_width):
+            return
+        if width > self._hold_width:
+            self.display.fill_rect(self._hold_width, 4,
+                                   width - self._hold_width, HOLD_BAR_H, AMBER)
+        else:
+            self.display.fill_rect(width, 4,
+                                   self.display.width - width, HOLD_BAR_H, BLACK)
+        self._hold_width = width
 
     def set_position(self, values):
         for axis, value in zip(AXES, values):

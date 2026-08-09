@@ -1,13 +1,20 @@
-"""FT6336U capacitive touch, reduced to taps.
+"""FT6336U capacitive touch, reduced to taps and holds.
 
 The pendant does not need gestures, drag or multitouch. It needs to know that
-somewhere was tapped, and where - so that is all this reports, and everything
-else the controller offers is deliberately dropped.
+somewhere was tapped or held, and where - so that is all this reports, and
+everything else the controller offers is deliberately dropped.
 
 Taps fire on press rather than release. Nothing a touch selects here moves the
 machine - axis and step are selections, not commands - so the responsiveness is
 free, and waiting for release makes a pendant feel unresponsive in a way that
 matters when standing at a machine with a part in it.
+
+Holds are the opposite case and exist for the opposite reason. Anything that
+drives the tool at the work has to be deliberate, and 800 ms of contact is hard
+to do by accident where a tap is not. It matches the physical zero button,
+which has wanted a hold since it was wired: one convention for "this one is
+consequential", rather than a different gesture depending on which surface the
+control happens to live on.
 
 Coordinates come out in display space with no transform. That is not luck: the
 panel is run in the same orientation the controller reports in, measured during
@@ -38,6 +45,16 @@ DEBOUNCE_MS = 250
 # that gets gripped.
 POLL_MS = 30
 
+# Contact before a hold fires. Matches buttons.LONG_PRESS_MS deliberately - the
+# operator should not have to learn that a screen hold and a button hold take
+# different amounts of time.
+HOLD_MS = 800
+
+# Movement that cancels a hold, in pixels. A finger resting for most of a
+# second wanders, and demanding it stay still would make the gesture feel
+# broken; sliding off the target deliberately is how it gets abandoned.
+HOLD_SLOP_PX = 40
+
 
 class Touch:
     """Tap source for the FT6336U. Poll it; it returns (x, y) or None."""
@@ -57,10 +74,13 @@ class Touch:
 
         self._i2c = I2C(i2c_id, sda=Pin(sda), scl=Pin(scl), freq=freq)
         self._down = False
+        self._down_at = 0
+        self._down_point = None
+        self._held = False
         self._last_tap = time.ticks_add(time.ticks_ms(), -DEBOUNCE_MS)
         self.present = False
         self.chip_id = None
-        self.stats = {"taps": 0, "errors": 0}
+        self.stats = {"taps": 0, "holds": 0, "errors": 0}
 
         self._identify()
 
@@ -91,11 +111,16 @@ class Touch:
             self.present = False
 
     def poll(self):
-        """Return (x, y) for a new tap, or None.
+        """Return an event, or None.
 
-        Returns at most one tap per press. A finger held down produces nothing
-        after the first, and the debounce bounds how fast repeated taps can
-        arrive however quickly the panel reports them.
+        ("tap", x, y)      a press, once per contact
+        ("hold", x, y)     the same contact still down after HOLD_MS
+        ("progress", f)    fraction of the way to a hold, 0.0 to 1.0
+
+        Progress exists so the screen can show a hold filling. A gesture that
+        takes most of a second with no feedback is indistinguishable from one
+        that is not being registered, and the operator lets go and tries again -
+        which is the one thing a deliberate gesture must not encourage.
         """
         if not self.present:
             return None
@@ -112,18 +137,40 @@ class Touch:
         touching = (data[0] & 0x0F) > 0
         if not touching:
             self._down = False
+            self._held = False
+            self._down_point = None
             return None
-
-        if self._down:
-            return None                      # still the same press
-        self._down = True
-
-        now = time.ticks_ms()
-        if time.ticks_diff(now, self._last_tap) < DEBOUNCE_MS:
-            return None
-        self._last_tap = now
 
         x = ((data[1] & 0x0F) << 8) | data[2]
         y = ((data[3] & 0x0F) << 8) | data[4]
-        self.stats["taps"] += 1
-        return x, y
+        now = time.ticks_ms()
+
+        if not self._down:
+            self._down = True
+            self._held = False
+            self._down_at = now
+            self._down_point = (x, y)
+
+            if time.ticks_diff(now, self._last_tap) < DEBOUNCE_MS:
+                return None
+            self._last_tap = now
+            self.stats["taps"] += 1
+            return "tap", x, y
+
+        if self._held or self._down_point is None:
+            return None
+
+        # A finger resting for the best part of a second wanders. Only a move
+        # far enough to be leaving the target abandons the hold.
+        start_x, start_y = self._down_point
+        if abs(x - start_x) > HOLD_SLOP_PX or abs(y - start_y) > HOLD_SLOP_PX:
+            self._held = True                # abandoned, not fired
+            return "progress", 0.0
+
+        elapsed = time.ticks_diff(now, self._down_at)
+        if elapsed >= HOLD_MS:
+            self._held = True
+            self.stats["holds"] += 1
+            return "hold", start_x, start_y
+
+        return "progress", elapsed / HOLD_MS
