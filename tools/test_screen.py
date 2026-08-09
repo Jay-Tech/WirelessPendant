@@ -373,6 +373,26 @@ check("  the corner name sits above the row border",
       _row_bottom - 24 <= _detail.y + 16 <= _row_bottom - 2, True)
 check("    and is left-aligned", _detail.align, "left")
 
+# The refresh loop calls the DRO setters whatever page is showing, and their
+# fields hold DRO coordinates - so on the probe page they drew position digits
+# straight over it.
+probe_screen.show_page(1)
+probe_display.blits = []
+probe_screen.set_position((11.111, 22.222, 33.333))
+probe_screen.set_state("Run")
+probe_screen.set_link(True)
+probe_screen.set_mode("Y", 0.5, 4200.0)
+check("  DRO updates draw nothing on the probe page", probe_display.blits, [])
+
+# But they are remembered, so coming back does not show zero until the next
+# status frame - which reads as the machine having lost its position.
+probe_screen.show_page(0)
+check("  and the DRO shows them again on return",
+      probe_screen._positions["X"]._shown.strip(), "11.111")
+check("    including the state", probe_screen._state._shown.strip(), "Run")
+
+probe_screen.show_page(1)
+
 # Switching back restores the DRO, zones and all.
 probe_screen.show_page(0)
 check("  returning to the DRO restores its zones",

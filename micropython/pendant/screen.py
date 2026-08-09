@@ -202,6 +202,16 @@ class DroScreen:
         self._probe_corner = "?"
         self._probe_busy = False
         self._probe_detail = None
+
+        # The last values the pendant pushed, kept whatever page is showing.
+        #
+        # The DRO setters are called from the refresh loop regardless of page,
+        # and their fields hold DRO coordinates - so on the probe page they
+        # drew digits over it. Holding the values here means the page can
+        # ignore them and still show them the moment it comes back, rather
+        # than reading zero until the next status frame.
+        self._latest = {"position": None, "state": None, "link": None,
+                        "mode": None}
         self._axis = None
         self._axis_boxes = {}
         self.build()
@@ -396,11 +406,16 @@ class DroScreen:
                                  - len(label) * self._small.width) // 2,
                   text_y, len(label), color=GREY).set(label)
 
+        # Repainted from what was last pushed, not from placeholders. Coming
+        # back from the probe page to a DRO reading zero, until the next status
+        # frame overwrote it, looked like the machine had lost its position.
         self._last_position = {}
-        self.set_position((0.0, 0.0, 0.0))
-        self.set_state("?")
-        self.set_mode("?", 0.0, 0.0)
-        self.set_link(False)
+        latest = self._latest
+        self.set_position(latest["position"] or (0.0, 0.0, 0.0))
+        self.set_state(latest["state"] or "?")
+        mode = latest["mode"] or ("?", 0.0, 0.0)
+        self.set_mode(mode[0], mode[1], mode[2])
+        self.set_link(bool(latest["link"]))
 
     def _build_probe_page(self):
         """The probe menu: one full-width target per operation, plus a way back.
@@ -571,6 +586,9 @@ class DroScreen:
         self._hold_width = width
 
     def set_position(self, values):
+        self._latest["position"] = values
+        if self.page != 0:
+            return
         for axis, value in zip(AXES, values):
             if self._last_position.get(axis) == value:
                 continue
@@ -578,9 +596,15 @@ class DroScreen:
             self._positions[axis].set("{:.3f}".format(value))
 
     def set_state(self, state):
+        self._latest["state"] = state
+        if self.page != 0:
+            return
         self._state.set(state, STATE_COLORS.get(state, WHITE))
 
     def set_mode(self, axis, step, feed=0.0):
+        self._latest["mode"] = (axis, step, feed)
+        if self.page != 0:
+            return
         # Feed only. Distance per detent never changes, so a rising number
         # here is the only visible sign that winding faster is doing anything -
         # whereas axis and step are already shown by which row and which cell
@@ -605,6 +629,9 @@ class DroScreen:
             self._axis = axis
 
     def set_link(self, connected):
+        self._latest["link"] = connected
+        if self.page != 0:
+            return
         self._link.set("link up" if connected else "LINK DOWN",
                        GREEN if connected else RED)
 
