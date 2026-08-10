@@ -28,31 +28,43 @@ out worse than expected.
 
 ## Power
 
+> **Provisional.** This section is designed against the Waveshare module's
+> schematic, not against a part on the bench. Confirm it once the display is
+> wired and running - particularly the display's actual current at 3.3 V, which
+> decides whether the Pico's regulator carries it.
+
 The Amigo Pro has **no boost**. Its DEVICE connector is raw cell voltage,
-3.0–4.2 V, limited to about 1 A by the XB6096I2S. Both the display and the
-encoder want 5 V, so a boost is the one converter this board has to carry.
+3.0-4.2 V, limited to about 1 A by the XB6096I2S. The display runs at 3.3 V and
+only the encoder wants 5 V, so the sole converter this board has to carry is a
+small one for about 30 mA.
 
 ```
-USB-C ─→ LiPo Amigo Pro ─→ DEVICE (JST-PH, 3.0–4.2 V)
+USB-C ─→ LiPo Amigo Pro ─→ DEVICE (JST-PH, 3.0-4.2 V)
          charge · power path · protection · on/off button
                                     │
                    ┌────────────────┼────────────────┐
                    │                │                │
-              Pico VSYS        boost → 5 V      10k/10k → GP26
-            (1.8–5.5 V in)          │          (battery sense)
-                                    ├─→ display VCC
-                                    └─→ encoder Vcc ─→ 22k dividers ─→ GP2/GP3
+              Pico VSYS       boost → 5 V      10k/10k → GP26
+            (1.8-5.5 V in)          │         (battery sense)
+                   │                └─→ encoder Vcc ─→ 22k ─→ GP2/GP3
+              Pico 3V3 out
+                   └─→ display VCC
 ```
 
-**The Pico runs straight off the cell, not off the 5 V rail.** VSYS accepts
-1.8–5.5 V and the Pico's own buck-boost makes 3.3 V from it, so routing it
-through the boost first would be two conversions where one will do - roughly
-90% against 78% for the Pico's share of the load. The boost then only has to
-carry the display and the encoder.
+**The Pico runs straight off the cell.** VSYS accepts 1.8-5.5 V and the Pico's
+own buck-boost makes 3.3 V from it, so converting up to 5 V first would be two
+conversions where one will do.
 
-Both rails come from the switched DEVICE output, so they rise and fall together.
-That matters: a 5 V encoder feeding dividers into an unpowered Pico would push
-current through its protection diodes.
+**The display hangs off the Pico's 3V3 pin**, for a reason that is not obvious:
+a dedicated 3.3 V rail from a single cell cannot be an LDO or a plain buck,
+because the cell falls to 3.0 V - below the output. It would have to be a
+buck-boost, and the Pico already contains one sized for exactly this input
+range, with headroom on the 3V3 pin for external draw. Putting a second one on
+the carrier would be paying twice for the same converter.
+
+Everything derives from the switched DEVICE output, so the rails rise and fall
+together. That matters: a 5 V encoder feeding dividers into an unpowered Pico
+would push current through its protection diodes.
 
 ### The Amigo Pro is not on this board
 
@@ -88,16 +100,20 @@ charger overnight while turned off, which is the way it will actually be used.
 
 Estimates, worth confirming with a meter before ordering:
 
-| Load | at 5 V |
-|---|---|
-| display logic + backlight | 100–150 mA |
-| encoder | 20–40 mA |
-| touch controller | ~5 mA |
+| Load | Rail | Draw |
+|---|---|---|
+| display logic + backlight | 3V3, from the Pico | 100–150 mA |
+| touch controller | 3V3, from the Pico | ~5 mA |
+| RP2350 + WiFi | internal | 50–120 mA |
+| **encoder** | **5 V, from the boost** | **20–40 mA** |
 
-Call it 200 mA typical and 300 mA peak on the 5 V rail. Drawn from a 3.7 V cell
-at ~88% that is around 460 mA, and near 550 mA with the cell down at 3.2 V. The
-Pico adds 50–120 mA directly. Comfortably inside the Amigo's ~1 A ceiling, but
-the headroom shrinks as the cell drains, which is the wrong end to discover it.
+The 5 V rail carries the encoder and nothing else, so almost any boost will do.
+What was a 500 mA converter feeding the whole device is now about 30 mA.
+
+The number still worth measuring is the **display's current at 3.3 V**. It sits
+on the Pico's regulator alongside the RP2350 and the radio, and backlight
+current rises as voltage falls for the same brightness. There is headroom on
+that rail, but headroom is not a measurement.
 
 **Buy the boost as a module for this board.** A boost is one of the easier
 things to lay out badly - the switch node loop wants to be small, and a sloppy
@@ -159,27 +175,53 @@ breadboard.
 `SDO/MISO` and `SD_CS` stay unconnected - the panel is written to, never read,
 and the SD slot is unused.
 
-**Place both the 2.54 mm header and the 14-pin FPC footprint.** The module
-brings the same fourteen signals out on either, and unpopulated pads cost
-nothing. Which one gets fitted is a mechanical decision that cannot be made
-until the outline exists: a stacked 2.54 mm pair is about 8.5 mm plus
-clearance, against 1-2 mm for an FPC connector whose cable also flexes, so the
-carrier no longer has to sit rigidly behind the panel. On a handheld that is
-most of a centimetre of depth.
+**Place both the header and the FPC footprint.** The module brings its signals
+out on either - a 15-pin header and an **18-pin 0.5 mm FPC slot** - and
+unpopulated pads cost nothing. Which one gets fitted is a mechanical decision
+that cannot be made until the outline exists: a stacked 2.54 mm pair is about
+8.5 mm plus clearance, against 1-2 mm for an FPC connector whose cable also
+flexes, so the carrier no longer has to sit rigidly behind the panel. On a
+handheld that is most of a centimetre of depth.
+
+The module is **10.3 mm tall including its standoffs**, and its FPC connector is
+on the underside, sitting roughly level with them. So the connector lives inside
+the mounting gap rather than clear of it, and the carrier needs either a cutout
+beneath it or taller standoffs. Decide where the cable runs - through a slot to
+a socket on the far face, or sideways in the gap to one on the near face -
+before the outline is fixed, because that sets both the slot position and which
+cable orientation to order.
 
 Populate the header first. FPC has three ways to cost a board revision that a
-0.1 inch header does not - the pitch is 0.5 mm or 1.0 mm and the footprints are
-not interchangeable, cables come with contacts on the same or opposite sides at
-each end, and connectors come in top and bottom contact. Two of those three
+0.1 inch header does not - pitch, cables with contacts on the same or opposite
+sides at each end, and connectors in top or bottom contact. Two of those three
 mirror the pinout silently.
 
-**The display could run at 3V3, and should not.** LCDWiki document the module as
-accepting either, but note that a 3.3 V input cannot hold a full 3.3 V on the
-regulator's output, and the backlight - transistor-driven from the LED pin -
-dims as a result. Dropping the display to 3V3 would leave the encoder as the
-only 5 V load at about 30 mA and shrink the boost to something trivial, which is
-tempting until you are reading a DRO at the machine under shop lighting. Not a
-trade worth one fewer part.
+**The hole pattern in Pcb.dxf is measured against the previous vendor's module**
+- 73.84 x 45.56 mm, and a 14-pin header. Re-measure against the Waveshare part
+before the outline is committed. Nothing else in the layout depends on which
+display it is.
+
+**The display runs at 3V3, and 5 V would be worse.** This is vendor-specific and
+was decided the other way for the module that came first, so it is worth setting
+down why it changed.
+
+Both modules regulate VCC down to 3.3 V on board. The difference is the part.
+LCDWiki's used an AMS1117-class LDO with about 1.1 V of dropout, so a 3.3 V
+input could not produce 3.3 V and the backlight visibly dimmed. Waveshare's uses
+an **ME6217C33M5G** - 3.3 V, 800 mA, **180 mV dropout at 300 mA**. At this
+board's load the drop is nearer 90 mV, so 3.3 V in gives about 3.2 V on the
+panel rail, inside spec for both the ST7796S and the FT6336U.
+
+Feeding it 5 V is the worse option, not the safe one: that same LDO would
+dissipate (5 - 3.3) x 150 mA, roughly **255 mW**, in a SOT-23-5 under the screen
+of a sealed handheld - and you would have bought a 500 mA boost in order to
+create the heat. At 3V3 the regulator sits in dropout doing almost nothing.
+
+The module also carries a **TXS0108E** level translator. With VCC and the panel
+rail both near 3.3 V it is essentially passing through, which is the kindest
+case for it. If the panel ever shows corruption or fails to initialise, drop the
+SPI baudrate before suspecting the driver - that part has a reputation for being
+marginal on fast SPI.
 
 ### Touch — I2C1
 
