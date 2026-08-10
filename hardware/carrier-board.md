@@ -26,6 +26,50 @@ board came down to two measurements, both in the repo's history:
 `quadrature_pcnt.py` stays in the tree as a tested fallback if this board turns
 out worse than expected.
 
+## Geometry
+
+**162.00 x 56.00 mm**, 1.6 mm FR4. Two DXFs carry it, both in the same frame
+with the origin at the display end - X runs 0 to -162, Y runs 0 to -56.
+
+| File | Goes to | Contains |
+|---|---|---|
+| `Outline.dxf` | `Edge.Cuts` | board outline, the 8 x 5 mm wire slot, the 43 mm encoder cutout |
+| `Holes.dxf` | a user layer, e.g. `Dwgs.User` | all 73 drilled positions, as a placement template |
+
+`Outline.dxf` is generated from `Holes.dxf` by removing every circle except the
+43 mm one, so the two cannot drift out of alignment. Exporting them separately
+once produced a 180 degree frame flip that would have put every hole at the
+wrong end of the board.
+
+The split is a KiCad requirement: Import Graphics puts every entity on one
+layer, so a combined file sent to `Edge.Cuts` yields a board outline plus 74
+circular cutouts. **Imported DXF circles are drawings, not holes** - they drill
+nothing. Real holes come from footprints, and `Holes.dxf` only says where to put
+them.
+
+| Feature | Position |
+|---|---|
+| encoder cutout | 43 mm dia at (-132, -28), 50.8 mm bolt circle, 3 x 3.5 mm |
+| display mounts | 73.84 x 45.56 mm, 4 x 3.3 mm |
+| button column | X = -92, buttons at Y -14/-28/-42, panel screws at -7/-21/-35 |
+| wire slot | 8 x 5 mm at X -100..-92, Y -52.5..-47.5 |
+
+Four drill sizes across the whole board - 3.5 x3, 3.3 x4, 2.3 x10, 1.0 x56.
+Anything outside those four groups is a mistake, which makes the footprints easy
+to check by eye.
+
+**Why 56 mm wide.** It is sized to the display and its bezel. The 60 mm dial
+therefore overhangs the board by 2 mm per side, which is deliberate rather than
+an oversight: the dial sits above the board, and the case is built out to meet
+its bezel flush. The enclosure is wider than the PCB at the wheel end by design.
+
+**Why the buttons sit at X = -92.** They are squeezed between the display and
+the dial, and because the dial is round it reaches furthest toward the display
+exactly on the centreline - where the middle button is. At X = -92 the middle
+button clears the dial rim by 10.0 mm and the display's mounting holes by 13.4
+mm. Moving the column either way trades one against the other; no rearrangement
+of three buttons widens the corridor they sit in.
+
 ## Power
 
 > **Provisional.** This section is designed against the Waveshare module's
@@ -196,7 +240,7 @@ Populate the header first. FPC has three ways to cost a board revision that a
 sides at each end, and connectors in top or bottom contact. Two of those three
 mirror the pinout silently.
 
-**The hole pattern in Pcb.dxf - 73.84 x 45.56 mm - comes from Waveshare's own
+**The hole pattern in Holes.dxf - 73.84 x 45.56 mm - comes from Waveshare's own
 supplied CAD**, so it is already the right module. Still worth a caliper against
 the physical part before the outline is committed: vendor CAD and vendor
 hardware occasionally disagree, and a mounting pattern is an expensive thing to
