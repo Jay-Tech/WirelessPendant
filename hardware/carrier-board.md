@@ -219,26 +219,67 @@ breadboard.
 `SDO/MISO` and `SD_CS` stay unconnected - the panel is written to, never read,
 and the SD slot is unused.
 
-**Place both the header and the FPC footprint.** The module brings its signals
-out on either - a 15-pin header and an **18-pin 0.5 mm FPC slot** - and
-unpopulated pads cost nothing. Which one gets fitted is a mechanical decision
-that cannot be made until the outline exists: a stacked 2.54 mm pair is about
-8.5 mm plus clearance, against 1-2 mm for an FPC connector whose cable also
-flexes, so the carrier no longer has to sit rigidly behind the panel. On a
-handheld that is most of a centimetre of depth.
+**Use Interface 1, the 18-pin 0.5 mm FPC.** The module offers two host
+interfaces and both carry display and touch together, so either would work
+electrically:
 
-The module is **10.3 mm tall including its standoffs**, and its FPC connector is
-on the underside, sitting roughly level with them. So the connector lives inside
-the mounting gap rather than clear of it, and the carrier needs either a cutout
-beneath it or taller standoffs. Decide where the cable runs - through a slot to
-a socket on the far face, or sideways in the gap to one on the near face -
-before the outline is fixed, because that sets both the slot position and which
-cable orientation to order.
+| | Interface 1 | Interface 2 |
+|---|---|---|
+| Type | 18-pin FPC, 0.5 mm | **JST GH**, 15-pin, 1.25 mm |
+| Cable | flat flex, **supplied with the module** | crimped harness |
+| Carrier part | 18-pos 0.5 mm ZIF socket | `SM15B-GHS-TB` header |
+| Cable parts | none to buy | 2x `GHR-15V-S` + 30x `SSHL-002T-P0.2` |
 
-Populate the header first. FPC has three ways to cost a board revision that a
-0.1 inch header does not - pitch, cables with contacts on the same or opposite
-sides at each end, and connectors in top or bottom contact. Two of those three
-mirror the pinout silently.
+Interface 2 looked the better choice while it was mistaken for a coarse-pitch
+FPC - 1.25 mm is far kinder to solder than 0.5 mm, and a GH latch holds better
+under vibration than a ZIF actuator. Two things settle it the other way.
+
+**Height.** GH is wire-to-board. The module stands **10.3 mm tall including its
+standoffs**, with both connectors on the underside roughly level with them, so
+there is about 4 mm of gap. A mated GH plug is 3.4-5 mm before the wires have
+bent, which does not fit. Flat flex is under 1 mm and turns tightly.
+
+**The cable ships with the module.** That removes the three specs that would
+otherwise each have to be guessed correctly - pitch, length, and whether
+contacts sit on the same or opposite faces at the two ends. Two of those three
+mirror the pinout silently when wrong.
+
+What the supplied cable does decide is whether the socket must be **top or
+bottom contact**. Do not reason it out: plug the cable into the module, route it
+to where the socket will sit, and look at which face the exposed contacts
+present. Measure its length too - it constrains how far from the module the
+socket can be placed.
+
+A ZIF actuator holds less firmly than a latch and this is a tool that gets
+carried around a shop, so add a retainer or a dab of RTV once it is working. And
+solder the socket before anything tall goes on the board, while an iron can
+still lie flat.
+
+One connector carries the whole module - display and touch both - and every
+signal lands on a pin the firmware already uses:
+
+| FPC | Signal | Goes to |
+|---|---|---|
+| 1 | VCC | Pico 3V3 |
+| 2 | LCD_BL | GP22 |
+| 3 | GND | GND |
+| 4 | LCD_SCLK | GP18 |
+| 5 | LCD_MOSI | GP19 |
+| 6 | LCD_MISO | unconnected - the panel is written to, never read |
+| 7 | LCD_DC | GP20 |
+| 8 | LCD_RST | GP21 |
+| 9 | LCD_CS | GP17 |
+| 10 | SD_CS | unconnected - the card slot is unused |
+| 11, 16-18 | NC | - |
+| 12 | TP_RST | GP13 |
+| 13 | TP_SCL | GP11 |
+| 14 | TP_SDA | GP10 |
+| 15 | TP_INT | GP12 |
+
+Interface 2 additionally brings out the module's regulated **3V3** rail, which
+Interface 1 does not. That is the LDO's output, so driving it externally would
+bypass the regulator and recover the ~90 mV it drops. Not worth back-feeding a
+regulator for, and moot on Interface 1.
 
 **The hole pattern in Holes.dxf - 73.84 x 45.56 mm - comes from Waveshare's own
 supplied CAD**, so it is already the right module. Still worth a caliper against
