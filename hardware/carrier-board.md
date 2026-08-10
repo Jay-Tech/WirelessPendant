@@ -196,10 +196,11 @@ Populate the header first. FPC has three ways to cost a board revision that a
 sides at each end, and connectors in top or bottom contact. Two of those three
 mirror the pinout silently.
 
-**The hole pattern in Pcb.dxf is measured against the previous vendor's module**
-- 73.84 x 45.56 mm, and a 14-pin header. Re-measure against the Waveshare part
-before the outline is committed. Nothing else in the layout depends on which
-display it is.
+**The hole pattern in Pcb.dxf - 73.84 x 45.56 mm - comes from Waveshare's own
+supplied CAD**, so it is already the right module. Still worth a caliper against
+the physical part before the outline is committed: vendor CAD and vendor
+hardware occasionally disagree, and a mounting pattern is an expensive thing to
+find wrong after the boards arrive.
 
 **The display runs at 3V3, and 5 V would be worse.** This is vendor-specific and
 was decided the other way for the module that came first, so it is worth setting
