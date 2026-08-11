@@ -61,12 +61,27 @@ def wifi_connect(ssid, password, hostname=None):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
 
-    # Power saving costs latency spikes for no benefit while jogging; see the
-    # serial bridge notes for the measurements behind this.
+    # Power saving costs latency for no benefit while jogging, and it is on by
+    # default: a fresh interface reads back PM_PERFORMANCE, whose low nibble is
+    # 2 for PM2 power save. Left alone the radio parks between DTIM beacons and
+    # puts roughly a beacon interval under every round trip. Measured round trip
+    # bottoms out at 8 ms only because this call happens - see
+    # selftest_latency.py.
+    #
+    # Failing quietly would cost about 90 ms per message and look like a network
+    # problem, so it says so instead. Reported rather than raised: a pendant that
+    # jogs slowly still jogs, and a port without the constant should not be a
+    # pendant that will not start.
+    #
+    # Use the named constant, not the 0xa11140 that circulates for this. Both
+    # disable power save - the low nibble is the mode, and both are 0 - but that
+    # literal is a packed value from a different build's defaults, and only the
+    # nibble is doing the work.
     try:
         wlan.config(pm=network.WLAN.PM_NONE)
-    except Exception:
-        pass
+    except Exception as exc:
+        log("power save NOT disabled ({}: {}) - expect ~100 ms round trips"
+            .format(type(exc).__name__, exc))
 
     if wlan.isconnected():
         return wlan.ifconfig()[0]
