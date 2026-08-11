@@ -1,5 +1,15 @@
 # Pendant carrier board
 
+> **Superseded by [platform-decision.md](platform-decision.md).** The pendant
+> moves to an ESP32-S3 all-in-one board with a dedicated link, because an
+> open-source pendant cannot require the builder to have usable WiFi - a
+> requirement none of the reasoning below was weighed against.
+>
+> Kept rather than deleted. The electrical and mechanical work here is still
+> correct and most of it carries over: the encoder dividers, the argument
+> against running the display at 3V3, the dial overhang, the encoder bolt web,
+> the button clearance, the wire slot. Only the board that hosts it changed.
+
 First draft off the breadboard. The carrier holds the Pico 2 W, the display, the
 two encoder dividers and the buttons, and takes its power from a LiPo Amigo Pro
 mounted separately in the case.
