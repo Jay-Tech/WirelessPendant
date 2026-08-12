@@ -652,9 +652,22 @@ fine_feed = 2375.0
 check("  and clears baseline transport lag at a fine step",
       max((fine_feed / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM) > fine_lag, True)
 
-# While still binding where run-ahead actually runs away.
-check("  while still binding at a coarse step",
-      max((9000.0 / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM) < 96.0, True)
+# And clearing it at a coarse step too, which is where it was wrong. 96 mm used
+# to stand here as the runaway figure; that was a 5000 mm/min machine, and on a
+# 15000 one 96 mm is ordinary. Measured instead: a sustained 400 mm traverse at
+# F9000, replayed from the PC with no pendant and no throttling, was smooth
+# with the feed solid at 9000 and lag peaking at 84 mm. That run had no radio
+# in it, so add the worst status delay measured at the machine - 222 ms, which
+# at 150 mm/s is another 33 mm.
+coarse_healthy = 84.0 + 33.0
+coarse_bound = max((9000.0 / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM)
+check("  while clearing healthy sustained traverse at a coarse step",
+      coarse_bound > coarse_healthy, True)
+
+# Still a guard, though. The runaway it exists to catch measured 521 mm steady
+# and 573 mm at peak on the machine, with the planner never leaving 125-128.
+check("    and still binding before the measured runaway",
+      coarse_bound < 521.0, True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.

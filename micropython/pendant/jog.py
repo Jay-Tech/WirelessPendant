@@ -173,7 +173,33 @@ PLANNER_FILL_RATIO = 2.0
 # bound set close to the real figure therefore binds well before the buffer is
 # actually that deep, which is the mistake this had already made once at a fine
 # step.
-RUNAHEAD_LIMIT_S = 0.5
+#
+# Raised again, from a half second, and for the third time for the same reason:
+# the bound was the active limiter rather than the guard it is meant to be. The
+# figures above were fitted when $110 was 5000. It is 15000 now, so the same
+# fraction of a second buys the same time but a third of the margin against a
+# lag that scales with feed - and 0.5 put the bound at 75 mm at F9000, right
+# through the middle of normal operation.
+#
+# What settled it was measuring the healthy case directly rather than inferring
+# it. tools/replay_pendant.py streams the identical protocol from the PC over
+# loopback with no throttling anywhere, and a sustained 400 mm traverse at
+# F9000 was smooth by eye with the reported feed solid at 9000 throughout. Lag
+# on that run, read before any reversal could contaminate it, was 65 mm at one
+# second and 39 mm at two, peaking at 84.
+#
+# So 40-84 mm is what healthy looks like here, and the bound sat at 75. The
+# pendant pinned itself inside a second of any sustained turn, the planner
+# never built depth - free stayed at 125-128 of 128 against the replay's 98-124
+# under identical load - and the machine ran on 2-3 blocks for the rest of the
+# traverse. Felt as smooth motion that turns to ticking about a quarter of the
+# way along a 49 inch table, which is exactly how long it takes to get there.
+#
+# The replay had no radio in it, so the pendant needs headroom above that
+# figure, not equal to it: 68 ms median and 222 ms worst measured at the
+# machine is another 10-33 mm of apparent lag at 150 mm/s. That puts the real
+# requirement near 117 mm, and a second gives 150.
+RUNAHEAD_LIMIT_S = 1.0
 
 # Floor under that bound, in millimetres.
 #
