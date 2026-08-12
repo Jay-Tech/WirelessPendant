@@ -123,6 +123,17 @@ budget of 13-17 mm. Transport has stopped being a term in the equation.
 Bench figures, not shop figures, and both ends are MicroPython - C would be
 quicker again.
 
+**PSRAM costs nothing.** Repeated on the `SPIRAM_OCT` build, where MicroPython's
+heap lives in external RAM rather than internal SRAM and could plausibly have
+shown up as latency: min 9.81, median 9.92, p90 19.92, p99 39.90, again 200/200.
+The median moved 0.16 ms, which is noise. The tail reads better but two runs
+cannot separate that from run to run variation, so the claim is only that
+nothing was lost.
+
+That matters because the framebuffer headroom depends on it - `gc.mem_free()`
+reports 8.3 MB against 226 KB on the plain build, and a 320x480x2 buffer needs
+307 KB. So a full-frame update is affordable without paying for it in latency.
+
 ## Still open
 - **Meter pin 2 on battery.** The schematic says USB only; some PMICs in this
   family have an OTG boost a parts list would not reveal. Ten seconds.
