@@ -151,7 +151,29 @@ TOUCH_POLL_MS = 30
 HOLD_TARGETS = ("probe",)
 
 WATCHDOG_MS = 100
-STALL_WARN_MS = 100
+
+# Lateness that counts as a stall, in milliseconds.
+#
+# Was 100, which is the wrong size for what this is watching. The jog scheduler
+# ticks every 20 ms, so a block only has to reach 40 ms to cost two ticks and
+# make the next message a double-length one - and block length varying tick to
+# tick is precisely the stumble the planner regulation exists to avoid. A
+# threshold at 100 reports nothing until five ticks are gone.
+#
+# That gap mattered: a whole day of machine testing read "stall=0/0ms" as
+# proof the loop was clean and looked elsewhere, when all it proved was that
+# nothing blocked for a tenth of a second. Sized against TICK_MS now rather
+# than against what would look alarming in a log.
+STALL_WARN_MS = 30
+
+# Stalls logged per session before it goes quiet. Counting continues either
+# way and the periodic one-liner still reports the total and the worst.
+#
+# Bounded because the log line is written over USB CDC, and a host that is not
+# draining makes print() block the loop - which is the fault this measures. An
+# unbounded stall log at a 30 ms threshold is a diagnostic that manufactures
+# its own findings, the same trap the jog trace tables fell into.
+STALL_LOG_BUDGET = 3
 
 # Which panel is fitted. "st7796" is the MSP3525/MSP3526 3.5" 320x480 IPS;
 # "ili9341" is the 2.4" 320x240 it replaced, kept because it is the fallback
@@ -165,6 +187,17 @@ PANEL = "st7796"
 # reports.
 ROTATION = 0 if PANEL == "st7796" else 90
 SPI_BAUD = 20_000_000
+
+# How often the panel is repainted, or 0 to build the layout once and never
+# touch it again.
+#
+# Zero is a diagnostic, not a mode anyone should jog in - the DRO freezes. It
+# exists because the display is the one thing the pendant does that the PC-side
+# replay does not, and the replay is smooth at a step and feed where the
+# pendant stumbles. Redrawing the DRO digits is a blocking SPI write on the
+# same event loop as the jog tick, so it is a candidate for the stumble that
+# nothing else has ruled out, and switching it off is the way to find out in
+# one run rather than reason about it.
 DISPLAY_REFRESH_MS = 100
 
 # A reported feed below this share of the commanded one, while the commanded
@@ -546,6 +579,10 @@ async def refresh_display():
     # Replace the splash with the live layout now the panel is known good.
     screen.build()
 
+    if not DISPLAY_REFRESH_MS:
+        link.log("display refresh OFF - DRO will not update (diagnostic)")
+        return
+
     while True:
         try:
             screen.set_link(pendant_link.connected if pendant_link else False)
@@ -638,8 +675,9 @@ async def watchdog():
             state["stalls"] += 1
             if late > state["worst_stall_ms"]:
                 state["worst_stall_ms"] = late
-            link.log("loop stalled {} ms - nothing ran, including the link"
-                     .format(late))
+            if state["stalls"] <= STALL_LOG_BUDGET:
+                link.log("loop stalled {} ms - nothing ran, including the link"
+                         .format(late))
 
 
 async def report():
