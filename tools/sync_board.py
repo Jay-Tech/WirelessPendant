@@ -32,8 +32,9 @@ PENDANT = ROOT / "micropython" / "pendant"
 # the script being run but not its imports, so a module missing from this list
 # fails as "no module named 'pendant'" - the second half of the try/except
 # import - which reads like a packaging problem rather than a missing file.
-MODULES = ["quadrature.py", "protocol.py", "link.py", "jog.py", "buttons.py",
-           "ili9341.py", "st7796.py", "screen.py", "touch.py"]
+MODULES = ["quadrature.py", "quadrature_pcnt.py", "protocol.py", "link.py",
+           "jog.py", "buttons.py", "ili9341.py", "st7796.py", "tca9554.py",
+           "screen.py", "touch.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
 DEFAULT_DEVICE = board.device()

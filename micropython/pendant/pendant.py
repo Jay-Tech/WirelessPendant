@@ -31,17 +31,82 @@ try:
     import protocol
     from buttons import ButtonPanel, PRESS, RELEASE, LONG_PRESS
     from jog import JogScheduler, TICK_MS
-    from quadrature import Quadrature
 except ImportError:
     from pendant import link, protocol
     from pendant.buttons import ButtonPanel, PRESS, RELEASE, LONG_PRESS
     from pendant.jog import JogScheduler, TICK_MS
-    from pendant.quadrature import Quadrature
 
 import secrets
+import sys
 
-ENCODER_PIN_A = 2
-ENCODER_PIN_B = 3
+# --- board profile --------------------------------------------------------
+#
+# Two boards, one firmware. Everything below this block is written against the
+# names, so adding a third is a matter of another branch rather than edits
+# scattered through the file.
+#
+# Keeping the Pico alive is not sentiment: it is the reference. When something
+# on the ESP32 feels wrong, the only way to tell a platform problem from a port
+# problem is to run the same code on hardware that already worked.
+_ESP32 = sys.platform == "esp32"
+
+if _ESP32:
+    # Waveshare ESP32-S3-Touch-LCD-3.5. The display pins are not in Waveshare's
+    # wiki and cannot be read off their schematic PDF - they come from their
+    # demo code. See hardware/platform-decision.md.
+    ENCODER_PIN_A, ENCODER_PIN_B = 9, 10
+    BUTTON_PINS = (38, 39, 40)
+
+    SPI_ID = 2
+    PIN_SCK, PIN_MOSI, PIN_MISO = 5, 1, 2
+    PIN_DC, PIN_BL = 3, 6
+    # Two entries that are not GPIOs at all: chip select is tied low on this
+    # board, and reset hangs off a TCA9554 expander. The display driver takes
+    # None for the first and a callable for the second, so neither is a special
+    # case here - see start_display().
+    PIN_CS = None
+    PIN_RST = None
+    TCA_ADDRESS, TCA_LCD_RESET = 0x20, 1
+
+    # Touch shares the board's I2C bus with the PMIC, RTC and IMU. No interrupt
+    # or reset line is broken out, and none is needed: the controller is polled.
+    PIN_TOUCH_SDA, PIN_TOUCH_SCL = 8, 7
+    PIN_TOUCH_INT, PIN_TOUCH_RST = None, None
+    TOUCH_I2C_ID = 0
+else:
+    # Raspberry Pi Pico 2 W.
+    ENCODER_PIN_A, ENCODER_PIN_B = 2, 3
+    BUTTON_PINS = (7, 8, 9)
+
+    SPI_ID = 0
+    PIN_SCK, PIN_MOSI, PIN_MISO = 18, 19, None
+    PIN_DC, PIN_BL = 20, 22
+    PIN_CS = 17
+    PIN_RST = 21
+    TCA_ADDRESS, TCA_LCD_RESET = None, None
+
+    # Capacitive touch on its own bus. Level converted on the module, so 3.3V
+    # logic is safe against it.
+    PIN_TOUCH_SDA, PIN_TOUCH_SCL = 10, 11
+    PIN_TOUCH_INT, PIN_TOUCH_RST = 12, 13
+    TOUCH_I2C_ID = 1
+
+# Which decoder, and it is not a preference. The RP2350 version registers its
+# pin IRQ with hard=True, which the ESP32 port does not support at all, and a
+# soft IRQ would sit behind the interpreter where a display refresh could hold
+# it off long enough to drop edges. ESP32 counts in PCNT hardware instead, which
+# nothing on the chip can delay. Both present the same class, so nothing below
+# here knows which it got.
+if _ESP32:
+    try:
+        from quadrature_pcnt import Quadrature
+    except ImportError:
+        from pendant.quadrature_pcnt import Quadrature
+else:
+    try:
+        from quadrature import Quadrature
+    except ImportError:
+        from pendant.quadrature import Quadrature
 
 START_AXIS = "X"
 START_STEP_INDEX = 2  # 0.1 mm per detent
@@ -59,30 +124,18 @@ AXIS_ORDER = ("X", "Y", "Z")
 # commands the sender will forward mid-job, and hunting for a touch target is
 # not something to do with a tool in the work. Zeroing stays on a long hold for
 # the same reason it always was: it rewrites the work offset.
-BUTTON_MAP = (
-    (7, "feed_hold"),
-    (8, "cycle_start"),
-    # Zeroing fires on a long hold, never a tap. It rewrites the work offset,
-    # and doing that by accident mid-job loses your datum. There is no manual
-    # jog cancel button: the scheduler already cancels when the wheel stops.
-    (9, "zero_axis"),
-)
+# Zeroing fires on a long hold, never a tap. It rewrites the work offset, and
+# doing that by accident mid-job loses your datum. There is no manual jog cancel
+# button: the scheduler already cancels when the wheel stops.
+BUTTON_MAP = tuple(zip(BUTTON_PINS,
+                       ("feed_hold", "cycle_start", "zero_axis")))
 
 BUTTON_POLL_MS = 20
 
 # Display. Optional throughout: if the panel is absent or miswired the pendant
 # still jogs, which matters because the display is a convenience and the
-# handwheel is the function.
+# handwheel is the function. Its pins are in the board profile above.
 DISPLAY_ENABLED = True
-SPI_ID = 0
-PIN_SCK, PIN_MOSI = 18, 19
-PIN_CS, PIN_DC, PIN_RST, PIN_BL = 17, 20, 21, 22
-
-# Capacitive touch, on its own I2C bus. Level converted on the module, so 3.3V
-# logic is safe against it.
-PIN_TOUCH_SDA, PIN_TOUCH_SCL = 10, 11
-PIN_TOUCH_INT, PIN_TOUCH_RST = 12, 13
-TOUCH_I2C_ID = 1
 
 # Well inside a finger's dwell time, and cheap: the I2C read is a few
 # hundred microseconds against the SPI the panel is already doing.
@@ -352,13 +405,39 @@ def start_display():
             from pendant.st7796 import ST7796S
             from pendant.ili9341 import ILI9341
 
-        spi = SPI(SPI_ID, baudrate=SPI_BAUD, polarity=0, phase=0,
-                  sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI))
+        if PIN_MISO is None:
+            spi = SPI(SPI_ID, baudrate=SPI_BAUD, polarity=0, phase=0,
+                      sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI))
+        else:
+            spi = SPI(SPI_ID, baudrate=SPI_BAUD, polarity=0, phase=0,
+                      sck=Pin(PIN_SCK), mosi=Pin(PIN_MOSI),
+                      miso=Pin(PIN_MISO))
+
+        # Reset is a pin on one board and an I2C write on the other. The driver
+        # accepts either - a pin number or a callable - so the expander stays
+        # out of it and out of the driver.
+        #
+        # This opens the same bus start_touch() will open again a moment later.
+        # Harmless: both ask for the same frequency, the expander is not touched
+        # after reset, and sharing one object would mean threading it through
+        # two constructors to save an initialisation that costs nothing.
+        reset = PIN_RST
+        if TCA_ADDRESS is not None:
+            from machine import I2C
+            try:
+                from tca9554 import TCA9554
+            except ImportError:
+                from pendant.tca9554 import TCA9554
+            expander = TCA9554(I2C(TOUCH_I2C_ID, sda=Pin(PIN_TOUCH_SDA),
+                                   scl=Pin(PIN_TOUCH_SCL), freq=400000),
+                               TCA_ADDRESS)
+            reset = expander.reset_line(TCA_LCD_RESET)
+
         # The panel is built here and handed to the layout, so fitting a
         # different one is a change to these two lines rather than to the
         # layout - which is the whole reason the display is injected.
         driver = ST7796S if PANEL == "st7796" else ILI9341
-        display = driver(spi, PIN_CS, PIN_DC, PIN_RST, PIN_BL, ROTATION)
+        display = driver(spi, PIN_CS, PIN_DC, reset, PIN_BL, ROTATION)
         panel = DroScreen(display)
         panel.splash("connecting...")
         link.log("display on SPI{} at {} MHz".format(
@@ -503,11 +582,21 @@ async def publish_mode():
 async def status_led():
     """no wifi = fast blink, idle = heartbeat, connected = solid.
 
-    Written only on change: the LED is on the CYW43, so each write is an SPI
-    transaction competing with the radio. See the serial bridge for the
-    latency this cost when it was rewritten every cycle.
+    Written only on change: on the Pico the LED is on the CYW43, so each write
+    is an SPI transaction competing with the radio. See the serial bridge for
+    the latency this cost when it was rewritten every cycle.
+
+    Boards without one simply do without. The ESP32-S3 display board has no
+    user LED - its two indicators are wired to the charger and the power rail,
+    not to a GPIO - and on a pendant with a screen the LED was never the way
+    you learn the link is down anyway.
     """
-    led = Pin("LED", Pin.OUT)
+    try:
+        led = Pin("LED", Pin.OUT)
+    except (ValueError, TypeError):
+        link.log("no status LED on this board - the screen says it instead")
+        return
+
     lit = None
 
     def show(on):
