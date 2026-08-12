@@ -228,6 +228,18 @@ def main():
                                   status.actual_feed, status.frames))
     except KeyboardInterrupt:
         print("\ninterrupted")
+    except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+        # Almost always the pendant, not a fault. PendantService accepts one
+        # client and the newest wins, so a running pendant displaces this tool
+        # and its auto-reconnect displaces it back a second later - which
+        # arrives here as a reset a handful of messages in, and reads like a
+        # network problem rather than the two of them taking turns.
+        print("\nconnection dropped after {} message(s).".format(sent))
+        if sent < 20:
+            print("  That is almost certainly the pendant reconnecting and"
+                  " taking the slot back.")
+            print("  The sender accepts one client, newest wins. Stop the"
+                  " pendant and re-run.")
     finally:
         try:
             send(sock, {"t": "jog_cancel"})
