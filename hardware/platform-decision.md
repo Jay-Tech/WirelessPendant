@@ -88,10 +88,42 @@ screen, and 8 MB PSRAM, enough for a full 320x480x2 framebuffer.
   called 5V and no boost anywhere. So the encoder still needs a small 3V3 to 5 V
   boost, about 30 mA, exactly as sized for the carrier board.
 
-## Still open
+## Measured
 
-- **Confirm `espnow` is in the MicroPython build.** Built in for ESP32 since
-  v1.21 and the bench board runs v1.28, but the whole plan rests on it.
+ESP-NOW between the ESP32-S3 board and an ESP-WROOM-32, on the bench, against
+the TCP link measured the same way - same 200 samples at 50 ms, same
+percentiles. See `selftest_espnow.py` and `selftest_latency.py`.
+
+| | ESP-NOW | TCP | |
+|---|---|---|---|
+| min | 9.36 | 8 | same |
+| **median** | **9.76** | 61 | **6.3x** |
+| mean | 15.02 | - | |
+| p90 | 19.82 | 90 | 4.5x |
+| **p99** | **59.77** | 207 | **3.5x** |
+| max | 60.12 | 217 | 3.6x |
+
+200/200, nothing unacknowledged, nothing silent.
+
+**The tail is the result.** The test was written to distinguish two
+explanations: if the median improved but p99 did not, the ceiling would be the
+2.4 GHz environment and leaving the infrastructure behind would buy
+determinism without buying latency. The p99 improved 3.5x, so the ceiling was
+the network stack - association, beacons, access point scheduling and the
+sender's own WiFi hop - and removing the infrastructure removed them.
+
+The other tell is that **median sits on top of min**, 9.76 against 9.36. Almost
+every sample is at the floor, so the link adds no queuing delay of its own.
+Under TCP a median of 61 against a min of 8 meant nearly every packet paid
+overhead.
+
+In the units that matter: 9.8 ms is **0.41 mm** at 2500 mm/min, against a lag
+budget of 13-17 mm. Transport has stopped being a term in the equation.
+
+Bench figures, not shop figures, and both ends are MicroPython - C would be
+quicker again.
+
+## Still open
 - **Meter pin 2 on battery.** The schematic says USB only; some PMICs in this
   family have an OTG boost a parts list would not reveal. Ten seconds.
 - **Prototype the link** with the ESP-WROOM-32 devkit as receiver - ESP-NOW is
