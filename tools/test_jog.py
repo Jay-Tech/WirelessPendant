@@ -582,8 +582,13 @@ print("\nplanner depth regulation")
 CAPACITY = 128
 
 def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE,
-                 lag_mm=0.0):
-    """Drive a steady turn while the controller reports a fixed depth."""
+                 lag_mm=0.0, actual_feed=None):
+    """Drive a steady turn while the controller reports a fixed depth.
+
+    `actual_feed` is what the controller reports draining. None stands for a
+    machine keeping up exactly with the commanded feed, which is what every
+    case here assumed before the recovery path began regulating against it.
+    """
     enc, sched = new_scheduler()
     for _ in range(step_index):
         sched.step_up()
@@ -592,6 +597,7 @@ def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE,
     sent = 0
     for _ in range(ticks):
         sched.lag_mm = lag_mm
+        sched.actual_feed = sched.feed if actual_feed is None else actual_feed
         enc.move(4 * detents_per_tick)
         message = motion(sched.tick())
         if message:
@@ -620,6 +626,24 @@ check("  and a supplied one is fed at the drain rate",
 starved_far_behind, sent_far = run_at_depth(CAPACITY, lag_mm=10000.0)
 check("run-ahead past the limit stops the fill",
       sent_far <= sent_supplied, True)
+
+# Stopping the fill is not enough on its own - the branch that stops it also
+# has to be able to get back. Pinned at the commanded feed it could not: the
+# hand sets that, so a machine falling behind was still sent the hand's rate,
+# commanded distance outran actual, and the lag that triggered the bound could
+# only grow from there. Measured on the machine as 521 mm with the planner
+# never once leaving its maximum, against a replay of the identical stream
+# from the PC that ran smooth and filled it a hundred blocks deep.
+_, sent_slow = run_at_depth(CAPACITY, lag_mm=10000.0, actual_feed=1200.0)
+_, sent_quick = run_at_depth(CAPACITY, lag_mm=10000.0, actual_feed=9000.0)
+check("  and past it emission follows the machine, not the hand",
+      sent_slow < sent_quick, True)
+
+# Zero is what an idle or stale report reads. Stopping dead on it strands the
+# lag exactly as pinning at the hand's rate did, one direction round instead of
+# the other, so the floor matters as much as the cap.
+_, sent_idle = run_at_depth(CAPACITY, lag_mm=10000.0, actual_feed=0.0)
+check("    while a zero report still emits", sent_idle > 0, True)
 # The bound has to clear the baseline transport lag, which at a fine step is
 # larger than a quarter second of travel. Sized only on time it fired before
 # any filling had happened and held the planner empty.

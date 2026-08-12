@@ -725,7 +725,35 @@ class JogScheduler:
                     cap = self.feed * (1.0 + (PLANNER_FILL_RATIO - 1.0)
                                        * shortfall / PLANNER_TARGET_BLOCKS)
             elif self.planner_capacity:
-                cap = self.feed
+                # Over the bound. Emit what the machine is taking, not what
+                # the hand is asking for.
+                #
+                # This branch used to pin at self.feed, and that could not
+                # recover. self.feed follows the wheel, so whenever the
+                # planner is shallow - which is the state being recovered
+                # from - the machine cannot reach it, and emitting it anyway
+                # means commanded distance outruns actual. Lag then grows, the
+                # condition above gets further from true rather than closer,
+                # and the session stays pinned for good. Measured on the
+                # machine as lag climbing 155 -> 495 -> 521 mm with the
+                # planner never once leaving its maximum, against a replay of
+                # the identical stream from the PC that ran smooth at F9000
+                # and filled the planner a hundred blocks deep.
+                #
+                # actual_feed is the controller's own report of what it is
+                # draining, so capping on it is the only thing here with
+                # negative feedback in it: emit the drain, lag stops growing,
+                # the machine closes the gap, the bound is satisfied and
+                # filling resumes on its own.
+                cap = self.actual_feed
+                # A stale or idle report of zero would stop emission dead and
+                # the lag would never come down - the same trap the other way
+                # round. Never above the hand either: actual_feed can exceed
+                # the commanded feed while a faster earlier block runs out.
+                if cap < FEED_MIN_MM_MIN:
+                    cap = FEED_MIN_MM_MIN
+                if cap > self.feed:
+                    cap = self.feed
             else:
                 # No Bf: report, so there is no depth to regulate against.
                 # Emit exactly the drain and say so once, rather than
