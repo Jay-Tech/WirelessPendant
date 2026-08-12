@@ -191,6 +191,25 @@ RUNAHEAD_LIMIT_S = 0.5
 # run-ahead actually runs away.
 MIN_RUNAHEAD_MM = 25.0
 
+# Fraction of the bound the lag must fall back to before filling resumes.
+#
+# One threshold cannot serve both directions. Filling drives lag towards the
+# bound by design, so a single edge is crossed, cleared, and crossed again a
+# tick later - and the cap alternates with it. That is a limit cycle, and it is
+# felt: the machine measured lag oscillating 52 -> 64 -> 77 against a bound of
+# 72 at F8606, with the feed changing on every crossing.
+#
+# The same shape as the second depth check that was tried and reverted further
+# down, for the same reason. That one had no way to be made stable because the
+# quantity it tested was itself the thing it moved. This one does: separate the
+# edges and the state has to travel a real distance to change, so a crossing
+# costs one transition instead of one per tick.
+#
+# Only reachable once lag can come down at all, which it could not before the
+# recovery path regulated against actual_feed - pinned at the hand's rate it
+# latched permanently, and a latch does not oscillate.
+RUNAHEAD_RELEASE_RATIO = 0.6
+
 # --- turn rate drives feed, not distance ----------------------------------
 #
 # Spinning faster raises the feed rate. It does not multiply the distance.
@@ -371,6 +390,8 @@ class JogScheduler:
         self.planner_capacity = 0     # largest free count seen = empty planner
         self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
+        self._runahead_pinned = False  # latched by the bound, released by the
+                                       # ratio - see RUNAHEAD_RELEASE_RATIO
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -714,7 +735,16 @@ class JogScheduler:
             runahead_mm = (self.feed / 60.0) * RUNAHEAD_LIMIT_S
             if runahead_mm < MIN_RUNAHEAD_MM:
                 runahead_mm = MIN_RUNAHEAD_MM
-            if self.planner_capacity and self.lag_mm <= runahead_mm:
+            # Two edges, not one. Filling drives lag at the bound, so a single
+            # threshold is crossed and recrossed every tick once recovery works
+            # at all, and the cap alternates with it.
+            if self._runahead_pinned:
+                if self.lag_mm <= runahead_mm * RUNAHEAD_RELEASE_RATIO:
+                    self._runahead_pinned = False
+            elif self.lag_mm > runahead_mm:
+                self._runahead_pinned = True
+
+            if self.planner_capacity and not self._runahead_pinned:
                 held = self.planner_capacity - self.planner_free
                 shortfall = PLANNER_TARGET_BLOCKS - held
                 if shortfall <= 0:
