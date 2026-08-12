@@ -50,6 +50,16 @@ def color565(r, g, b):
     return ((value & 0xFF) << 8) | (value >> 8)
 
 
+def _no_chip_select(_value):
+    """Stands in for a chip select the board does not have.
+
+    Some boards tie the panel's select low permanently, so there is no pin to
+    toggle. Swallowing the call here keeps every transfer site written the one
+    way, rather than each of the six growing a test for whether the pin exists.
+    """
+    pass
+
+
 BLACK = color565(0, 0, 0)
 WHITE = color565(255, 255, 255)
 GREY = color565(128, 128, 128)
@@ -68,10 +78,23 @@ class ILI9341:
     ROTATIONS = _ROTATIONS
 
     def __init__(self, spi, cs, dc, rst=None, backlight=None, rotation=90):
+        """`cs` may be None on a board that ties chip select low, and `rst` may
+        be a callable instead of a pin where reset is not a GPIO at all - both
+        of which the ESP32-S3 display board is. Passing a callable keeps the
+        expander out of this file: the driver asks for a reset and does not care
+        whether that is a pin or an I2C write.
+        """
         self._spi = spi
-        self._cs = Pin(cs, Pin.OUT, value=1)
+        self._cs = _no_chip_select if cs is None else Pin(cs, Pin.OUT, value=1)
         self._dc = Pin(dc, Pin.OUT, value=0)
-        self._rst = Pin(rst, Pin.OUT, value=1) if rst is not None else None
+
+        if callable(rst):
+            self._reset_fn = rst
+            self._rst = None
+        else:
+            self._reset_fn = None
+            self._rst = Pin(rst, Pin.OUT, value=1) if rst is not None else None
+
         self._backlight = (Pin(backlight, Pin.OUT, value=1)
                            if backlight is not None else None)
 
@@ -96,6 +119,9 @@ class ILI9341:
         self._cs(1)
 
     def reset(self):
+        if self._reset_fn is not None:
+            self._reset_fn()
+            return
         if self._rst is None:
             return
         self._rst(1)
