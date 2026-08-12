@@ -193,9 +193,19 @@ fighting it.
 - **Meter pin 2 on battery.** The schematic says USB only; some PMICs in this
   family have an OTG boost a parts list would not reveal. Ten seconds, once a
   battery exists.
-- **The encoder against the real wheel.** PCNT passed on synthesised edges but
-  has not yet counted the handwheel. GPIO9 and GPIO10 on the header, with 5 V
-  for the encoder from pin 2 while USB is attached.
+- ~~**The encoder against the real wheel.**~~ Done. On GPIO9 and GPIO10 with the
+  22 kOhm dividers and 5 V from header pin 2, one aligned revolution reads
+  **exactly 400 counts** - 100 detents, full 4x decode, nothing lost. Reversals
+  tracked cleanly over several thousand counts at around 185 detents/s.
+
+  That number is the diagnostic, not a formality. PCNT cannot report illegal
+  transitions the way `quadrature.py` does, so counts per revolution is what
+  replaces the `errors` counter: an exact multiple of 400 says every edge was
+  seen, and anything not divisible by four, or drifting across repeated turns,
+  is the tell. Worth re-running once it is in the enclosure on a longer cable.
+
+  An earlier attempt read 268, which was a turn judged by eye rather than a
+  decoder fault - align the dial before trusting a single revolution.
 - **ESP-NOW at the machine.** The bench says the link is good; the shop is the
   environment whose answer counts, and it decides whether the IPEX external
   antenna earns its place.
