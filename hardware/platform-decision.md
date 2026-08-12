@@ -173,11 +173,32 @@ be dropped.
 Everything else - the init sequence, MADCTL, INVON, the framebuffer push - is
 unchanged, because it is the same ST7796S behind it.
 
+## Display: verified, and it cost nothing
+
+Brought up on the board with the two driver changes above and nothing else.
+`ROTATION = 0`, 320 x 480, red green and blue correct at the first attempt, and
+a four-corner test lands where it should with the USB-C port at the bottom.
+
+So the MADCTL value and `INVON` worked out for the other vendor's module are
+right for this one too - the panel is oriented the same way. `st7796.py` and the
+whole of `screen.py` transfer intact, including the portrait layout, the DRO
+digits, the step grid and the probe page. None of it needed touching.
+
+USB-C at the bottom also matches the reference pendant this is modelled on,
+where the cable exits the bottom edge, so it suits the enclosure rather than
+fighting it.
+
 ## Still open
+
 - **Meter pin 2 on battery.** The schematic says USB only; some PMICs in this
-  family have an OTG boost a parts list would not reveal. Ten seconds.
-- **Prototype the link** with the ESP-WROOM-32 devkit as receiver - ESP-NOW is
-  interoperable across ESP32 families, so both ends are already in hand.
+  family have an OTG boost a parts list would not reveal. Ten seconds, once a
+  battery exists.
+- **The encoder against the real wheel.** PCNT passed on synthesised edges but
+  has not yet counted the handwheel. GPIO9 and GPIO10 on the header, with 5 V
+  for the encoder from pin 2 while USB is attached.
+- **ESP-NOW at the machine.** The bench says the link is good; the shop is the
+  environment whose answer counts, and it decides whether the IPEX external
+  antenna earns its place.
 - **Pairing.** ESP-NOW addresses by MAC. Needs a story for someone who owns two.
 - **Sender transport.** `PendantService` becomes a serial reader rather than a
   TCP listener. The JSON-lines protocol can stay as it is.
