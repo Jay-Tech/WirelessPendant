@@ -1,11 +1,20 @@
-"""The board this repo talks to, in one place.
+"""The boards this repo talks to, in one place.
 
-Every tool that reaches the Pico resolves the device through here rather than
-carrying its own copy of the serial number, so changing board means changing
-one line or setting one environment variable.
+Every tool resolves its device through here rather than carrying its own copy
+of a serial number, so switching boards is a name rather than a paste.
 
-    set PICO_DEVICE=id:XXXXXXXXXXXXXXXX     (Windows)
-    export PICO_DEVICE=id:XXXXXXXXXXXXXXXX  (POSIX)
+    python tools/run_pendant.py --device pico
+    python tools/sync_board.py --device esp32
+
+Or point a whole session at one:
+
+    set PICO_DEVICE=pico                    (Windows)
+    export PICO_DEVICE=pico                 (POSIX)
+
+A raw device string still works everywhere a name does, so an unlisted board
+needs no edit here:
+
+    set PICO_DEVICE=id:XXXXXXXXXXXXXXXX
 
 Run it to see what is attached:
 
@@ -23,22 +32,42 @@ import os
 import subprocess
 import sys
 
-# This bench's Pico 2 W. Override with PICO_DEVICE rather than editing, unless
-# the board has been replaced for good.
-DEFAULT_DEVICE = "id:7BE7DD09548134C0"
+# The boards on this bench, by name. Serial numbers rather than COM ports: the
+# ESP32-S3 presents different USB descriptors in MicroPython and in its ROM
+# bootloader, so Windows renumbers it whenever it is reflashed, and a port that
+# was right an hour ago is not.
+BOARDS = {
+    "pico": "id:7BE7DD09548134C0",      # Pico 2 W - the original pendant
+    "esp32": "id:441BF6856C480000",     # Waveshare ESP32-S3-Touch-LCD-3.5
+}
+
+# Which one a tool talks to when nothing says otherwise. Both are live: the
+# ESP32 is where the pendant is going, and the Pico is the reference it gets
+# compared against when something feels wrong.
+DEFAULT_BOARD = "esp32"
+DEFAULT_DEVICE = BOARDS[DEFAULT_BOARD]
 
 # USB VID:PID pairs worth calling out when listing. Not an allowlist - anything
-# unrecognised is simply unlabelled - but these two are the ones that matter:
-# one is what we want to talk to, the other is what must never be talked to.
+# unrecognised is simply unlabelled - but these are the ones that matter: two
+# are what we want to talk to, one is what must never be talked to.
 KNOWN = {
     "2e8a:0005": "Raspberry Pi Pico (MicroPython)",
+    "303a:4001": "ESP32-S3 (MicroPython)",
+    "303a:1001": "ESP32-S3 (ROM bootloader - esptool, not mpremote)",
     "0483:5740": "STM32 - grblHAL CONTROLLER, DO NOT TARGET",
 }
 
 
 def device(explicit=None):
-    """Resolve the device string: explicit argument, then env, then default."""
-    return explicit or os.environ.get("PICO_DEVICE") or DEFAULT_DEVICE
+    """Resolve the device string: explicit argument, then env, then default.
+
+    A board name is accepted anywhere a device string is, so `--device esp32`
+    works as well as the serial number it stands for. PICO_DEVICE takes either
+    too, which keeps `set PICO_DEVICE=pico` as a way to point a whole session
+    at the other board.
+    """
+    chosen = explicit or os.environ.get("PICO_DEVICE") or DEFAULT_DEVICE
+    return BOARDS.get(chosen, chosen)
 
 
 def mpremote(dev, *args, capture=True):
@@ -72,9 +101,18 @@ def connected():
 
 def main():
     target = device()
-    print("target device: {}".format(target))
+    name = next((n for n, d in BOARDS.items() if d == target), None)
+    print("target device: {}{}".format(
+        target, "  ({})".format(name) if name else ""))
     if os.environ.get("PICO_DEVICE"):
         print("  (from PICO_DEVICE)")
+    print()
+
+    print("known boards:")
+    for board_name, board_device in BOARDS.items():
+        print("  {:<8} {}{}".format(
+            board_name, board_device,
+            "  <- default" if board_name == DEFAULT_BOARD else ""))
     print()
 
     devices = connected()
