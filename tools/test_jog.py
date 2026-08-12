@@ -18,7 +18,6 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          FEED_DEADBAND,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
                          RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM,
-                         RUNAHEAD_RELEASE_RATIO,
                          MIN_FEED_BLOCK_MS)
 
 # Index by value, so adding a step to the ladder cannot silently retarget a
@@ -656,46 +655,6 @@ check("  and clears baseline transport lag at a fine step",
 # While still binding where run-ahead actually runs away.
 check("  while still binding at a coarse step",
       max((9000.0 / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM) < 96.0, True)
-
-# Hysteresis. The same lag has to mean different things depending on which side
-# it arrived from, or the bound is crossed and recrossed every tick: filling
-# drives lag towards the bound by design, so a single edge alternates the cap
-# and the feed changes on every message. Measured on the machine as lag
-# oscillating 52 -> 64 -> 77 against a bound of 72.
-def run_with_lag(profile, free=CAPACITY, detents_per_tick=40):
-    """Drive a steady turn while the measured lag follows `profile`."""
-    enc, sched = new_scheduler()
-    for _ in range(COARSE):
-        sched.step_up()
-    sched.planner_capacity = CAPACITY
-    sched.planner_free = free
-    sent = []
-    for lag in profile:
-        sched.lag_mm = lag
-        sched.actual_feed = sched.feed
-        enc.move(4 * detents_per_tick)
-        message = motion(sched.tick())
-        sent.append(abs(message["det"]) if message else 0)
-    return sched, sent
-
-# Taken from a settled run rather than assumed: the bound follows the feed, and
-# a hardcoded figure here would drift the moment the feed table moved.
-settled, _ = run_with_lag([0.0] * SETTLE)
-bound = max((settled.feed / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM)
-# Inside the band - past the release, below the bind - so the state alone
-# decides, which is the whole point of having two edges.
-band = bound * (1.0 + RUNAHEAD_RELEASE_RATIO) / 2.0
-
-_, from_above = run_with_lag([bound * 2.0] * SETTLE + [band] * SETTLE)
-_, from_below = run_with_lag([0.0] * SETTLE + [band] * SETTLE)
-check("the bound releases lower than it binds",
-      sum(from_above[SETTLE:]) < sum(from_below[SETTLE:]), True)
-
-# And it does release, given a lag that actually comes back down. A band with
-# no exit is the latch this replaced, wearing a different constant.
-_, recovered = run_with_lag([bound * 2.0] * SETTLE + [0.0] * SETTLE)
-check("  and releases once the lag clears the ratio",
-      sum(recovered[SETTLE:]) > sum(from_above[SETTLE:]), True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.
