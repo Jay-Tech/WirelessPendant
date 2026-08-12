@@ -333,7 +333,7 @@ TRACE_TICKS = 24            # how much history to keep either side
 #
 # Six is enough to see a pattern. The sixtieth dump has never said anything the
 # sixth did not.
-TRACE_DUMP_BUDGET = 6
+TRACE_DUMP_BUDGET = 0
 
 TRACE_QUIET_MS = 5000
 TRACE_QUIET_TICKS = max(1, TRACE_QUIET_MS // TICK_MS)
