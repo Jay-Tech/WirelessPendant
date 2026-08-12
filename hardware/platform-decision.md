@@ -134,6 +134,45 @@ That matters because the framebuffer headroom depends on it - `gc.mem_free()`
 reports 8.3 MB against 226 KB on the plain build, and a 320x480x2 buffer needs
 307 KB. So a full-frame update is affordable without paying for it in latency.
 
+## The board's own pin map
+
+Not in Waveshare's wiki or readable from the schematic PDF - taken from their
+demo code at github.com/waveshareteam/ESP32-S3-Touch-LCD-3.5, examples 08 and
+11, which agree.
+
+| Signal | GPIO |
+|---|---|
+| LCD MOSI | 1 |
+| LCD MISO | 2 |
+| LCD DC | 3 |
+| LCD SCLK | 5 |
+| LCD backlight | 6 |
+| **LCD CS** | **none** |
+| **LCD RST** | **TCA9554 at 0x20, pin 1** |
+| I2C SDA / SCL | 8 / 7 |
+| FT6336U touch | 0x38 on that I2C, polled - no INT or RST pin |
+
+An I2C scan confirms it: 0x18 ES8311, **0x20 TCA9554**, 0x34 AXP2101, 0x38
+FT6336U, 0x51 PCF85063, 0x6b QMI8658. The TCA9554 is not in the board's
+advertised feature list and answers writes but not reads, so a scan alone only
+tells you something is there.
+
+Touch is a drop-in: chip id 0xA3 reads 0x64 and vendor 0xA8 reads 0x11, exactly
+what `touch.py` already checks. Only the pin numbers change, and INT and RST can
+be dropped.
+
+**`st7796.py` needs two changes**, neither large:
+
+- **No chip select.** The panel is permanently selected, so the driver has to
+  tolerate `cs=None` rather than toggling a pin that does not exist.
+- **Reset is an I2C write**, not a pin. Waveshare's sequence is TCA pin 1 high,
+  10 ms, low, 10 ms, high, 200 ms. Cleanest fix is for the driver to take a
+  reset *callable* instead of a pin, so the caller supplies either a pin toggle
+  or an expander write and the driver stays platform-agnostic.
+
+Everything else - the init sequence, MADCTL, INVON, the framebuffer push - is
+unchanged, because it is the same ST7796S behind it.
+
 ## Still open
 - **Meter pin 2 on battery.** The schematic says USB only; some PMICs in this
   family have an OTG boost a parts list would not reveal. Ten seconds.
