@@ -171,6 +171,49 @@ Worth stating plainly because the numbers above are seductive: anyone reading
 this later - including whoever wrote it - should not conclude that ESP-NOW
 fixed a latency problem. It did not have one to fix.
 
+### Then ESP-NOW ran at the machine, and it holds
+
+The whole chain, moving a real axis: pendant to receiver over ESP-NOW,
+receiver on `main.py` presenting a serial port, `tools/espnow_bridge.py`
+carrying that to the port the sender already listens on. The sender itself is
+unmodified - it still thinks it is talking to a TCP pendant - which is the
+point of doing it in that order.
+
+**Feel is at parity with WiFi**, judged back to back on the same machine in the
+same session, with run-off perceived as slightly *less* over ESP-NOW. The
+numbers agree that nothing much changed:
+
+| | WiFi | ESP-NOW |
+|---|---|---|
+| 0.5 mm peak lag | 77.6 mm | 83.5 mm |
+| 1.0 mm peak lag | 112.7 mm | 96.0 mm |
+| planner depth reached | 10-12 | 10 |
+
+Equivalent, and that is the expected result once the mechanism is understood:
+**lag is set by the run-ahead bound, not by the transport.** The fill runs up
+to whatever the bound allows, so lag lands near the bound however quick the
+link is. A faster transport does not lower it.
+
+That leaves the reproducibility argument as the whole case for ESP-NOW, exactly
+as the section above concluded - now with the reassurance that adopting it
+costs nothing in feel.
+
+**One attempt to convert the faster link into less run-off failed, and is
+unexplained.** The bound has to clear planner depth plus a worst-case round
+trip; depth is a fixed 0.24 s, so on paper ESP-NOW's quicker link should allow
+0.35 s where WiFi needs 0.5. Tried at the machine it was worse, and then
+unusable. Reverted.
+
+Two candidates, and the tools to separate them do not exist yet. Either depth
+costs more than 0.24 s in practice, or **ESP-NOW at the machine is nothing like
+ESP-NOW on the bench** - and every ESP-NOW figure in this document is a bench
+figure. The second is easy to test and has never been done.
+
+A related loose end pointing the same way: over ESP-NOW the pendant reports
+**11 loop stalls to 83 ms** where WiFi reports 1, in otherwise identical runs.
+Not perceptible while jogging, but it is transport-specific and it is the most
+likely reason the bound behaved unlike its arithmetic.
+
 **PSRAM costs nothing.** Repeated on the `SPIRAM_OCT` build, where MicroPython's
 heap lives in external RAM rather than internal SRAM and could plausibly have
 shown up as latency: min 9.81, median 9.92, p90 19.92, p99 39.90, again 200/200.
@@ -254,16 +297,27 @@ fighting it.
 
   An earlier attempt read 268, which was a turn judged by eye rather than a
   decoder fault - align the dial before trusting a single revolution.
-- **ESP-NOW at the machine.** The bench says the link is good; the shop is the
-  environment whose answer counts, and it decides whether the IPEX external
-  antenna earns its place.
+- ~~**ESP-NOW at the machine.**~~ Done as far as *feel* goes: it drives the
+  machine, at parity with WiFi, with slightly less run-off. See above.
 
-  Weak evidence in hand already: on WiFi at the machine the board reported
+  **What is still unmeasured is its latency there.** Every ESP-NOW number in
+  this document - the 9.76 ms median, the 59.77 ms p99 - was taken on a bench.
+  Two findings now point at the shop being different: a run-ahead bound sized
+  from those figures made motion worse rather than better, and the pendant
+  reports eleven loop stalls over ESP-NOW where WiFi reports one.
+
+  `selftest_espnow.py` answers it directly and has never been run in the shop.
+  It needs both boards temporarily running it instead of their real firmware -
+  `ROLE = "respond"` on the receiver, `ROLE = "ping"` on the pendant - so it is
+  a deliberate exercise rather than something to slip into a jogging session.
+  Worth doing before anyone argues about that bound again.
+
+  Also still open, and unaffected by any of the above: whether the IPEX
+  external antenna earns its place. On WiFi at the machine the board reported
   **-37 to -62 dBm** depending on where it was held, with zero lost packets at
-  either end of that range. That is comfortable, and it suggests the internal
-  antenna is adequate here - but it is a measurement of a different radio
-  protocol on a different band plan, so it settles nothing about ESP-NOW and
-  says nothing about a shop with more steel in the path.
+  either end of that range - comfortable, and suggesting the internal antenna
+  is adequate here. But that is a different protocol on a different band plan,
+  and says nothing about a shop with more steel in the path.
 - **Pairing.** ESP-NOW addresses by MAC. Needs a story for someone who owns two.
 - **Sender transport.** `PendantService` becomes a serial reader rather than a
   TCP listener. The JSON-lines protocol can stay as it is.
