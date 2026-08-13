@@ -239,7 +239,7 @@ screen = None
 touch = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
-         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
+         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None, "lag_session": 0,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
          "planner_min": 999, "planner_max": 0, "bf_warned": False,
@@ -350,9 +350,29 @@ def update_lag(wpos):
     if index >= len(wpos):
         return
 
+    # A reconnect invalidates the reference as surely as an axis change does.
+    #
+    # commanded_mm keeps counting while the link is down, and the motion behind
+    # it is discarded rather than executed - link.py drops the queue on
+    # reconnect on purpose, so a minute-old detent cannot fire late - so the
+    # machine never travels that distance. Carried across the gap, the
+    # difference reads as lag that is permanently present and never decays.
+    #
+    # Which pins the run-ahead bound, starves the planner and produces motion
+    # that is rough and will not reach speed. Seen after restarting the sender:
+    # only restarting the pendant cleared it, because that was the one thing
+    # that reset this reference.
+    session = pendant_link.stats["sessions"] if pendant_link else 0
     reference = state["_ref"]
-    if reference is None or reference[0] != scheduler.axis:
+    if (reference is None or reference[0] != scheduler.axis
+            or session != state["lag_session"]):
+        state["lag_session"] = session
         state["_ref"] = (scheduler.axis, wpos[index], scheduler.commanded_mm)
+        # Cleared rather than left to be overwritten next frame: the scheduler
+        # reads this every tick and would spend the interval bounding itself
+        # against a figure already known to be meaningless.
+        state["lag_mm"] = 0.0
+        scheduler.lag_mm = 0.0
         return
 
     _, start_pos, start_cmd = reference
