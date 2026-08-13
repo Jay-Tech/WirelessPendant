@@ -123,6 +123,54 @@ budget of 13-17 mm. Transport has stopped being a term in the equation.
 Bench figures, not shop figures, and both ends are MicroPython - C would be
 quicker again.
 
+### What the shop said, and why it changes the argument
+
+The TCP column above is a **bench** figure. Measured again at the machine, over
+a dedicated 2.4 GHz SSID, with the pendant on it and the sender's PC on a
+different 5 GHz SSID - two wireless hops and a routing step:
+
+| | bench TCP | shop TCP |
+|---|---|---|
+| min | 8 | 16 |
+| median | 61 | 68 |
+| p90 | 90 | **86** |
+| p99 | 207 | **173** |
+| max | 217 | 222 |
+
+200/200 received, zero lost, one session. **The tail is better than the bench**,
+across a topology chosen to be pessimistic.
+
+That was measured while chasing motion that stumbled and would not recover, and
+it is the reason the whole line of enquiry turned around. The faults were all
+found elsewhere, each ruled in or out by measurement:
+
+- the **DRO redraw** blocking the pendant's event loop for up to 82 ms, four
+  jog ticks, invisible because the watchdog threshold was 100 ms
+- the **planner depth target**, fitted for a 5000 mm/min machine and too
+  shallow once `$110` reached 15000
+- a **run-ahead bound** that could stop the planner filling but never restart
+  it, so lag grew to 521 mm and stayed
+- an **orphaned sender process** holding the port with no window
+
+None of them transport. The same jog stream replayed from the PC over loopback
+- `tools/replay_pendant.py`, no radio in the path - reproduced the fault exactly
+when the pendant did and ran smooth when it did not.
+
+**So the honest case for ESP-NOW is not latency.** 68 ms median with a 173 ms
+p99 was never what made the pendant stumble, and a link seven times quicker
+would not have fixed any of the four faults above. The 6.3x is real and it is
+worth having, but it buys headroom rather than solving a problem.
+
+The argument that survives intact is the one at the top of this document: an
+open-source pendant cannot require the builder to have usable WiFi. That is a
+**reproducibility** argument, not a performance one. This shop's network turned
+out to be fine; the point is that the next builder's need not be, and no amount
+of tuning here can make that true for them.
+
+Worth stating plainly because the numbers above are seductive: anyone reading
+this later - including whoever wrote it - should not conclude that ESP-NOW
+fixed a latency problem. It did not have one to fix.
+
 **PSRAM costs nothing.** Repeated on the `SPIRAM_OCT` build, where MicroPython's
 heap lives in external RAM rather than internal SRAM and could plausibly have
 shown up as latency: min 9.81, median 9.92, p90 19.92, p99 39.90, again 200/200.
@@ -209,6 +257,13 @@ fighting it.
 - **ESP-NOW at the machine.** The bench says the link is good; the shop is the
   environment whose answer counts, and it decides whether the IPEX external
   antenna earns its place.
+
+  Weak evidence in hand already: on WiFi at the machine the board reported
+  **-37 to -62 dBm** depending on where it was held, with zero lost packets at
+  either end of that range. That is comfortable, and it suggests the internal
+  antenna is adequate here - but it is a measurement of a different radio
+  protocol on a different band plan, so it settles nothing about ESP-NOW and
+  says nothing about a shop with more steel in the path.
 - **Pairing.** ESP-NOW addresses by MAC. Needs a story for someone who owns two.
 - **Sender transport.** `PendantService` becomes a serial reader rather than a
   TCP listener. The JSON-lines protocol can stay as it is.
@@ -217,11 +272,25 @@ fighting it.
 
 Most of it. The transport changes; almost nothing else does.
 
-- **Every jog constant.** `MIN_RUNAHEAD_MM`, the planner targets, the feed
-  tables and the turn-rate window are machine and planner physics, not network
-  properties. They were also fitted on a *shared* network under real shop
-  conditions, so they carry margin rather than sitting on the edge - a dedicated
-  link can only shorten the path they were measured against.
+- **Every jog constant**, in the sense that none of them is a network property.
+  `MIN_RUNAHEAD_MM`, the planner targets, the feed tables and the turn-rate
+  window are machine and planner physics, and a change of transport does not
+  touch them.
+
+  What was written here before - that they carried margin because they were
+  fitted on a shared network - was wrong, and worth leaving corrected rather
+  than deleted. They were fitted against a **5000 mm/min** machine. Once `$110`
+  reached 15000 several of them were badly off, and the coarse steps were
+  unusable until they were refitted at the machine: `PLANNER_TARGET_BLOCKS` 6 to
+  12, `STEP_MAX_FEED` trimmed to 8000 and 10000 at the coarse steps, and
+  `RUNAHEAD_LIMIT_S` tried at 0.35, 0.4 and 1.0 before settling back at 0.5.
+
+  The lesson generalises past this project: these constants are fitted to a
+  *specific* machine's `$110` and `$120`, and anyone reproducing this on
+  different hardware should expect to refit them. The figure that makes that
+  tractable is planner depth, now reported in the pendant's periodic one-liner -
+  without it, a target never being reached and a target set too low look
+  identical.
 - **The enclosure work.** The board outline changes; every constraint solved in
   CAD does not - encoder body depth driving the case, the 60 mm dial overhanging
   the board, buttons squeezed between display and dial, the wire pass-through,
