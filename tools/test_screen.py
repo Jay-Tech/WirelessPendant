@@ -425,6 +425,40 @@ check("  the step highlight is redrawn after a page swap",
       probe_screen._step, 0.5)
 check("    and the axis highlight with it", probe_screen._axis, "Y")
 
+# One step cell per call. Painting both at once was a single uninterrupted SPI
+# write, measured at 59-64 ms on the machine - three jog ticks at a 20 ms tick -
+# and it fired on the step change, which is immediately before the operator
+# starts moving. It was the last loop stall left after the DRO redraw was split.
+zone_steps = list(probe_screen._zone_fields)
+probe_screen.show_page(0)
+probe_screen.set_step_highlight(zone_steps[0])
+while probe_screen._pending_zones:
+    probe_screen.set_step_highlight(zone_steps[0])
+
+probe_screen.display.rects = []
+probe_screen.set_step_highlight(zone_steps[1])
+one = len(probe_screen.display.rects)
+probe_screen.set_step_highlight(zone_steps[1])
+two = len(probe_screen.display.rects)
+probe_screen.set_step_highlight(zone_steps[1])
+three = len(probe_screen.display.rects)
+
+check("a step change paints one cell per call", one > 0 and two == one * 2, True)
+check("  and both cells do get painted", len(probe_screen._pending_zones), 0)
+check("    then it stops", three, two)
+check("      with the new step recorded immediately",
+      probe_screen._step, zone_steps[1])
+
+# A step changed again before the queue drains has to rebuild it rather than
+# append, or the cell that was going to be deselected never is - which shows as
+# two cells both looking selected.
+probe_screen.set_step_highlight(zone_steps[2])
+probe_screen.set_step_highlight(zone_steps[0])
+while probe_screen._pending_zones:
+    probe_screen.set_step_highlight(zone_steps[0])
+check("  a change mid-queue leaves exactly one cell selected",
+      probe_screen._step, zone_steps[0])
+
 probe_screen.show_page(1)
 
 # Switching back restores the DRO, zones and all.

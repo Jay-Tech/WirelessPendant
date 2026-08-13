@@ -221,6 +221,9 @@ class DroScreen:
         self.zones = Zones()
         self._hold_width = 0
         self._step = None
+        # Step cells waiting to be repainted, one per refresh - see
+        # set_step_highlight.
+        self._pending_zones = []
         # Which page is showing. The DRO is page 0 and the one the pendant
         # returns to, because a pendant left on a menu is a pendant that does
         # not show where the machine is.
@@ -390,6 +393,7 @@ class DroScreen:
                 self._draw_border(box, False)
 
         self._zone_fields = {}
+        self._pending_zones = []
         if self._zones_shown:
             self._build_step_zones(zones_top)
 
@@ -592,15 +596,35 @@ class DroScreen:
         field.set(text)
 
     def set_step_highlight(self, step):
-        """Mark which step cell is selected, repainting only what changed."""
-        if not self._zones_shown or step == self._step:
+        """Mark which step cell is selected, one cell per call.
+
+        A step change repaints two cells, the old and the new, and each is a
+        background fill, four border rects and a text field. Both together were
+        one uninterrupted SPI write measured at 59-64 ms on the machine -
+        three jog ticks at a 20 ms tick - and it fired on the step change,
+        which is immediately before the operator starts moving. It was the last
+        loop stall left after the DRO redraw was broken up.
+
+        Queuing them costs nothing visible. The caller runs this every display
+        refresh, so the second cell lands within a frame of the first and the
+        change still reads as instant - while the scheduler gets to run in
+        between, which is the whole point.
+        """
+        if not self._zones_shown:
             return
-        for value, box in self._zone_fields.items():
-            was = value == self._step
-            now = value == step
-            if was or now:
-                self._draw_zone(box[0], box[1], box[2], box[3], value, now)
-        self._step = step
+
+        if step != self._step:
+            # Rebuilt rather than appended, so a step changed again before the
+            # queue drained cannot leave a stale cell painted as selected.
+            self._pending_zones = [
+                (value, box, value == step)
+                for value, box in self._zone_fields.items()
+                if value == self._step or value == step]
+            self._step = step
+
+        if self._pending_zones:
+            value, box, selected = self._pending_zones.pop(0)
+            self._draw_zone(box[0], box[1], box[2], box[3], value, selected)
 
     def set_hold_progress(self, fraction):
         """Show how far a touch-and-hold has got, 0.0 to 1.0.
