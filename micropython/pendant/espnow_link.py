@@ -234,11 +234,6 @@ class PendantLink:
                         continue
                     if self.on_message:
                         self.on_message(decoded)
-                # Same reason as the send path. on_message runs the DRO update
-                # and the lag calculation, so a run of packets processed
-                # without a yield holds the loop for as long as that takes
-                # times however many arrived.
-                await asyncio.sleep_ms(0)
             else:
                 await asyncio.sleep_ms(POLL_MS)
 
@@ -269,17 +264,6 @@ class PendantLink:
                     # worse than a jog lost, and the deadline below will drop
                     # the peer if this is more than a glitch.
                     self.stats["unacked"] += 1
-                # Yield between sends. ESPNow.send() is synchronous - it waits
-                # for the peer's radio to acknowledge - so draining a backlog
-                # without this is that many blocking radio waits back to back
-                # with nothing else able to run. Measured as six loop stalls to
-                # 83 ms over ESP-NOW against one on WiFi, where the equivalent
-                # loop yielded inside drain().
-                #
-                # sleep_ms(0) rather than a delay: the cost of a send is the
-                # send, and this only has to give the scheduler its turn
-                # between them.
-                await asyncio.sleep_ms(0)
                 continue
 
             if time.ticks_diff(next_ping, time.ticks_ms()) <= 0:
