@@ -79,6 +79,29 @@ def device(explicit=None):
     return BOARDS.get(chosen, chosen)
 
 
+def port(explicit=None):
+    """Resolve a board to an OS serial port, e.g. "COM19" or "/dev/ttyACM0".
+
+    mpremote takes an `id:` string and finds the port itself. Anything else -
+    pyserial, a terminal program - needs the port name, and hardcoding one
+    reintroduces exactly the problem this module exists to avoid: COM numbers
+    move when a board is reflashed, and both ESP32-S3s here look identical in
+    a device listing.
+
+    Returns None if the board is not attached, which the caller should report
+    rather than fall back from - a bridge that quietly opened the wrong port
+    would be talking to whatever else was plugged in.
+    """
+    target = device(explicit)
+    if not target.startswith("id:"):
+        return target                   # already a port name
+    serial = target.split(":", 1)[1]
+    for name, description in connected():
+        if serial.lower() in description.lower():
+            return name
+    return None
+
+
 def mpremote(dev, *args, capture=True):
     """Run mpremote against a device. Returns (returncode, output).
 
