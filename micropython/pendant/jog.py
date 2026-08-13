@@ -198,7 +198,25 @@ PLANNER_FILL_RATIO = 2.0
 # bound set close to the real figure therefore binds well before the buffer is
 # actually that deep, which is the mistake this had already made once at a fine
 # step.
-RUNAHEAD_LIMIT_S = 0.5
+# Tightened from 0.5 to trade a little fill for less coast, once trimming the
+# coarse ceilings turned out to buy back less run-off than wanted.
+#
+# At 1 mm and F10000 this moves the gate from 83 mm to 67 mm. Note the measured
+# peak was 99.8 mm against the 83 - the bound gates filling rather than clawing
+# back what is already queued, so lag overshoots it and the whole band moves
+# down together rather than the peak landing on the number.
+#
+# What makes this safe now and would not have been this morning: the branch
+# taken when the bound binds used to pin emission at the hand's rate, which
+# could not recover and turned any crossing into a session-long stall. It caps
+# on the machine's own drain rate now, so a bound that occasionally binds costs
+# a little fill and nothing else.
+#
+# The floor under it is depth: 10 blocks of 3 mm is 30 mm, plus 11-37 mm of
+# transport lag at the measured 68-222 ms round trip, so 41-67 mm against a
+# 67 mm gate. Marginal at the top by design - if depth stops reaching 10, this
+# is binding too often and 0.45 is the next stop up.
+RUNAHEAD_LIMIT_S = 0.4
 
 # Floor under that bound, in millimetres.
 #
