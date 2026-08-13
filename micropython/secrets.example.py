@@ -20,3 +20,22 @@ WIFI_PASSWORD = "your-network-password"
 # makes it easier to find in your router's client list. Leave as None to
 # keep the MicroPython default.
 HOSTNAME = "pico2w"
+
+# The machine running the sender application, on that network. Only used by
+# the WiFi transport below. Its absence here once cost an evening: the pendant
+# came up, joined, and then failed in a way that read as a network fault
+# rather than a missing setting.
+SENDER_HOST = "192.168.1.100"
+SENDER_PORT = 8422
+
+# Which transport the pendant uses.
+#
+# False joins the WiFi above and opens a TCP session to SENDER_HOST. True
+# ignores both and talks ESP-NOW to the receiver board plugged into the
+# sender's PC, discovering it by broadcast - so nothing above needs to be
+# right for that path, and nothing changes when the PC's address does.
+#
+# ESP-NOW is where this is going: an open-source pendant cannot require the
+# builder to have usable WiFi in their shop. The WiFi path stays because it
+# is the reference every jog constant was fitted against.
+USE_ESPNOW = False

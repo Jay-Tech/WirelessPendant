@@ -793,21 +793,37 @@ async def main():
     link.log("axis {} at {} mm/detent, {} Hz".format(
         scheduler.axis, scheduler.step, 1000 // TICK_MS))
 
-    ip = link.wifi_connect(
-        secrets.WIFI_SSID, secrets.WIFI_PASSWORD,
-        getattr(secrets, "HOSTNAME", None))
-    if ip is None:
-        link.log("no network - check secrets.py")
-        return
+    # Which transport, chosen in secrets.py so switching one at the machine is
+    # a reboot rather than an edit. Both paths stay live deliberately: the WiFi
+    # one works and every jog constant was fitted over it, so it is the
+    # reference any ESP-NOW result gets compared against.
+    if getattr(secrets, "USE_ESPNOW", False):
+        try:
+            import espnow_link
+        except ImportError:
+            from pendant import espnow_link
 
-    host = getattr(secrets, "SENDER_HOST", None)
-    if host is None:
-        link.log("set SENDER_HOST in secrets.py to the sender's address")
-        return
-    port = getattr(secrets, "SENDER_PORT", 8422)
+        # No host, no port, no network to join. The pendant broadcasts until a
+        # receiver answers, so there is nothing here to get wrong in secrets.py
+        # and nothing to change when the PC's address does.
+        pendant_link = espnow_link.PendantLink(on_message=on_message)
+        link.log("ESP-NOW - looking for a receiver")
+    else:
+        ip = link.wifi_connect(
+            secrets.WIFI_SSID, secrets.WIFI_PASSWORD,
+            getattr(secrets, "HOSTNAME", None))
+        if ip is None:
+            link.log("no network - check secrets.py")
+            return
 
-    pendant_link = link.PendantLink(host, port, on_message=on_message)
-    link.log("sender at {}:{} - turn the wheel".format(host, port))
+        host = getattr(secrets, "SENDER_HOST", None)
+        if host is None:
+            link.log("set SENDER_HOST in secrets.py to the sender's address")
+            return
+        port = getattr(secrets, "SENDER_PORT", 8422)
+
+        pendant_link = link.PendantLink(host, port, on_message=on_message)
+        link.log("sender at {}:{} - turn the wheel".format(host, port))
 
     await asyncio.gather(
         pendant_link.run(),
