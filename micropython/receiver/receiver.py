@@ -61,6 +61,14 @@ SERIAL_CHUNK = 256
 # the pendant's own LineDecoder.
 MAX_LINE = 4096
 
+# How long this board may be silent before it answers a packet with a hello.
+#
+# Only reached when the sender has nothing to say: its status frames arrive at
+# 10 Hz and reset the timer, so during normal operation this never fires. When
+# it does, it is both how a rebooted pendant re-pairs and a keepalive proving
+# this end is still here.
+HELLO_REPLY_MS = 2000
+
 
 def mac_str(mac):
     return ":".join("%02X" % b for b in mac)
@@ -107,6 +115,7 @@ class Bridge:
         self.to_pendant = 0
         self.unacked = 0
         self.oversize = 0
+        self._last_tx = 0
         self._buffer = b""
 
     # --- pendant -> PC ----------------------------------------------------
@@ -128,14 +137,20 @@ class Bridge:
                 pass                    # already registered
             self.peer = host
             note("pendant " + mac_str(host))
-            # Answer it, even though there is nothing to say yet.
-            #
-            # The pendant discovers by broadcasting, and broadcasts are not
-            # acknowledged, so the only way it learns this board's address is
-            # by receiving something from it. Left to the sender's own traffic
-            # that could be a long wait - and would never come at all while the
-            # sender was closed, so a pendant would sit broadcasting at a
-            # receiver that had already heard it and report itself as down.
+
+        # Answer when this board has been quiet, whether or not the peer is new.
+        #
+        # The pendant discovers by broadcasting, and broadcasts are not
+        # acknowledged, so the only way it learns this board's address is by
+        # receiving something from it. Answering only an unfamiliar MAC looked
+        # sufficient and is not: a pendant that reboots keeps its MAC, so it
+        # would broadcast at a receiver that already knew it, get no reply, and
+        # never pair again until this board was restarted too.
+        #
+        # Sending nothing new during normal operation - the sender's status
+        # frames reset this timer at 10 Hz - so this only speaks when the link
+        # would otherwise be silent, where it doubles as a keepalive.
+        if time.ticks_diff(time.ticks_ms(), self._last_tx) > HELLO_REPLY_MS:
             self.send(b'{"t":"rx_hello"}')
 
         sys.stdout.buffer.write(message)
@@ -198,6 +213,7 @@ class Bridge:
             # is a link problem and the other could be the pendant.
             if self.link.send(self.peer, line):
                 self.to_pendant += 1
+                self._last_tx = time.ticks_ms()
             else:
                 self.unacked += 1
         except OSError:

@@ -124,6 +124,19 @@ class PendantLink:
         self._limit = queue_limit
         self._decoder = protocol.LineDecoder()
         self._last_rx = 0
+        # Last time a unicast send was acknowledged by the peer's radio.
+        #
+        # Liveness here is not "did anything arrive", which is what a socket
+        # forces you to use. ESP-NOW acknowledges every unicast at the MAC
+        # layer, so a successful send is direct proof the other radio is
+        # listening - available even when the far end has nothing to say.
+        #
+        # Without this the link tore itself down every RX_TIMEOUT_S whenever
+        # the sender was quiet, and then could not recover: rediscovery needs
+        # the receiver to answer, and the receiver had already learned this
+        # MAC and stopped answering. Seen on the bench as two hellos, a mode,
+        # a ping, and then broadcasts forever.
+        self._last_ack = 0
         self._ping_seq = 0
 
     # --- outbound ---------------------------------------------------------
@@ -177,6 +190,7 @@ class PendantLink:
         self.connected = True
         self.stats["sessions"] += 1
         self._last_rx = time.ticks_ms()
+        self._last_ack = self._last_rx
         log("receiver {} - link up".format(mac_str(host)))
         self._queue = [protocol.hello()]
 
@@ -186,9 +200,15 @@ class PendantLink:
             self.stats["dropped"] += 1
             return True                 # not a link failure, so do not tear down
         try:
-            return bool(self._link.send(peer, payload))
+            acked = bool(self._link.send(peer, payload))
         except OSError:
             return False
+        # Only unicast to the current peer counts as evidence. A broadcast is
+        # reported successful whether or not anything heard it, since there is
+        # nobody specific to acknowledge it.
+        if acked and peer == self._peer:
+            self._last_ack = time.ticks_ms()
+        return acked
 
     # --- the three loops --------------------------------------------------
 
@@ -260,9 +280,18 @@ class PendantLink:
             await asyncio.sleep_ms(500)
             if self._peer is None:
                 continue
-            idle_ms = time.ticks_diff(time.ticks_ms(), self._last_rx)
+            # Whichever kind of evidence is more recent. A sender with nothing
+            # to say leaves _last_rx stale while the peer is demonstrably
+            # there, and tearing the link down for that is what produced two
+            # hellos and then broadcasts forever on the bench - with
+            # unacked=0 in the very message announcing the link was dead.
+            now = time.ticks_ms()
+            idle_ms = min(time.ticks_diff(now, self._last_rx),
+                          time.ticks_diff(now, self._last_ack))
             if idle_ms > RX_TIMEOUT_S * 1000:
-                self._drop_peer("no traffic for {}s".format(RX_TIMEOUT_S))
+                self._drop_peer(
+                    "no traffic and no acknowledgement for {}s".format(
+                        RX_TIMEOUT_S))
 
     async def run(self):
         """Hold the link open forever, rediscovering as needed."""
