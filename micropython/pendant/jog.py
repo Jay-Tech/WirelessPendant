@@ -122,7 +122,36 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 #
 # So run ahead of the drain until the controller holds a real cushion, then
 # match the drain to hold it there. Depth is measured, not assumed.
-PLANNER_TARGET_BLOCKS = 6
+#
+# Raised from 6 once $110 went from 5000 to 15000, because the requirement
+# scales with the square of the feed and six blocks stopped being enough.
+#
+# The relationship is the one recorded above: a chained run reaches
+# sqrt(1500 x d) mm/s, so sustaining a feed needs d = v^2 / 1500 millimetres
+# chained behind it. Tripling the machine's top speed therefore needs nine
+# times the distance, and a target fitted at 5000 cannot survive that.
+#
+# Measured at the machine, as feed drops the operator could see on the sender:
+#
+#   0.5 mm, blocks of 3.0 mm: 6 deep is 18 mm -> 9860, just over the 9000
+#     asked for. At 3 deep it is 9 mm -> 6970, and the reported feed fell to
+#     7146.
+#   1.0 mm, blocks of 4.0 mm: 6 deep is 24 mm -> 11384, *below* the 12000
+#     commanded, so that step could never hold its own ceiling. At 4 deep it
+#     is 16 mm -> 9295, and the reported feed fell to 8958.
+#
+# Both observations land on integer block counts, which is what makes this a
+# fit rather than a story. It also explains the shape: a couple of jerks and
+# then a recovery is depth dipping and the fill correction rebuilding it.
+#
+# Twelve gives 36 mm chained at 0.5 mm (13900 achievable, against 9000 asked)
+# and 48 mm at 1.0 mm (16100, against 12000). Both sit under the run-ahead
+# bound at their feeds - 75 mm at F9000, 100 mm at F12000 - so the bound stays
+# the guard it is meant to be rather than becoming the limiter again.
+#
+# 0.1 mm is unaffected. It never asks for a speed that needs the depth, which
+# is why the fine steps stayed smooth throughout.
+PLANNER_TARGET_BLOCKS = 12
 
 # Ceiling on how far above the drain rate to emit, reached only when the
 # planner is completely empty. Two means the buffer gains a tick of work per
