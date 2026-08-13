@@ -39,6 +39,10 @@ import sys
 BOARDS = {
     "pico": "id:7BE7DD09548134C0",      # Pico 2 W - the original pendant
     "esp32": "id:441BF6856C480000",     # Waveshare ESP32-S3-Touch-LCD-3.5
+    "pendant": "id:441BF6856C480000",   # the same board, under the name that
+                                        # says what it is rather than what
+                                        # chip is on it
+    "receiver": "id:ACA7042DFB100000",  # ESP32-S3, the ESP-NOW end at the PC
 }
 
 # Which one a tool talks to when nothing says otherwise. Both are live: the
@@ -50,6 +54,11 @@ DEFAULT_DEVICE = BOARDS[DEFAULT_BOARD]
 # USB VID:PID pairs worth calling out when listing. Not an allowlist - anything
 # unrecognised is simply unlabelled - but these are the ones that matter: two
 # are what we want to talk to, one is what must never be talked to.
+#
+# Note that the pendant and the receiver are both ESP32-S3 and enumerate
+# identically, so this label cannot tell them apart and neither can a human
+# reading the list. Only the serial number does, which is the whole reason
+# every tool here targets an ID.
 KNOWN = {
     "2e8a:0005": "Raspberry Pi Pico (MicroPython)",
     "303a:4001": "ESP32-S3 (MicroPython)",
