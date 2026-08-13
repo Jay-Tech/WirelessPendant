@@ -731,15 +731,28 @@ async def report():
         # visible as two lines that scrolled past minutes ago, and the question
         # after one is always whether the link dropped or the loop stopped
         # servicing it.
+        #
+        # Planner depth is here because everything the scheduler does is aimed
+        # at it and none of it was visible: the target says twelve blocks, and
+        # a feed dropping from 9000 to 7146 says the chain behind it was worth
+        # about two. Whether the target is wrong or simply never reached are
+        # opposite faults with opposite fixes, and only this number tells them
+        # apart. Held now and deepest held, against capacity - it was only ever
+        # readable in the trace tables, which are off for machine work.
+        capacity = scheduler.planner_capacity
+        held = capacity - state["planner_free"] if capacity else 0
+        deepest = capacity - state["planner_min"] if capacity else 0
         link.log(
             "{} | axis {} step {} F{:.0f}/act{} collapse={} | {} | detents={}"
-            " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm err={}"
-            " sess={} stall={}/{}ms".format(
+            " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm depth={}/{} of {}"
+            " err={} sess={} stall={}/{}ms".format(
                 "up" if pendant_link.connected else "DOWN",
                 scheduler.axis, scheduler.step, scheduler.feed,
                 state["actual_feed"], state["feed_collapses"], position,
                 sent, dropped, kept,
-                state["lag_mm"], state["peak_lag_mm"], encoder.errors,
+                state["lag_mm"], state["peak_lag_mm"],
+                held, deepest, capacity,
+                encoder.errors,
                 pendant_link.stats["sessions"], state["stalls"],
                 state["worst_stall_ms"]))
 
