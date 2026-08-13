@@ -128,6 +128,15 @@ class Bridge:
                 pass                    # already registered
             self.peer = host
             note("pendant " + mac_str(host))
+            # Answer it, even though there is nothing to say yet.
+            #
+            # The pendant discovers by broadcasting, and broadcasts are not
+            # acknowledged, so the only way it learns this board's address is
+            # by receiving something from it. Left to the sender's own traffic
+            # that could be a long wait - and would never come at all while the
+            # sender was closed, so a pendant would sit broadcasting at a
+            # receiver that had already heard it and report itself as down.
+            self.send(b'{"t":"rx_hello"}')
 
         sys.stdout.buffer.write(message)
         if not message.endswith(b"\n"):
@@ -162,9 +171,18 @@ class Bridge:
             note("oversize line from PC discarded")
 
     def send(self, line):
-        """Send one line to the pendant, if there is one and it fits."""
+        """Send one line to the pendant, if there is one and it fits.
+
+        The newline goes back on here. One packet carries exactly one
+        newline-terminated line, which makes the wire format identical to what
+        crossed the TCP socket - so the pendant's existing LineDecoder reads
+        this with no change, and a decoder that needs a terminator to emit
+        cannot sit holding a message forever.
+        """
         if not line:
             return
+        if not line.endswith(b"\n"):
+            line += b"\n"
         if self.peer is None:
             # Nothing to send to yet. Dropped rather than queued: these are
             # status frames, and a status held until a pendant appears would
