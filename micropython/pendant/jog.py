@@ -123,30 +123,27 @@ IDLE_TICKS_BEFORE_CANCEL = max(1, IDLE_MS_BEFORE_CANCEL // TICK_MS)
 # So run ahead of the drain until the controller holds a real cushion, then
 # match the drain to hold it there. Depth is measured, not assumed.
 #
-# At 12 provisionally, and the reason is worth stating precisely because the
-# arithmetic that first motivated it was wrong.
+# Twelve, and it is the single change that turned the coarse steps from
+# unusable to smooth. Worth recording why the arithmetic does not predict it.
 #
-# A chained run reaches v = sqrt(2ad), so sustaining a feed needs
-# d = v^2 / 2a millimetres chained behind it. $120 is 1500, giving:
+# A chained run reaches v = sqrt(2ad), so sustaining a feed needs d = v^2 / 2a
+# millimetres chained behind it. At $120 = 1500 that is 7.5 mm for 9000 at
+# 0.5 mm - 2.5 blocks - and 13.3 mm for 12000 at 1 mm, 3.3 blocks. By that
+# measure six was always sufficient and this should change nothing.
 #
-#   9000 at 0.5 mm  -> 7.5 mm  -> 2.5 blocks of 3.0 mm
-#   12000 at 1.0 mm -> 13.3 mm -> 3.3 blocks of 4.0 mm
+# It changed everything, so the steady-state figure is the wrong target. Real
+# motion dips - transport jitter, block length varying with the commanded feed,
+# a hand that pauses to re-grip - and the depth has to cover the dips, not the
+# average. Six sat close enough to the requirement that any dip fell through
+# it, and the feed followed sqrt down: measured drops to 7146 at 0.5 mm and
+# 8958 at 1 mm, which work back to about two blocks chained.
 #
-# So six was always enough, and raising it does not fix anything by itself.
-# The sqrt(1500 x d) written further up is sqrt(2ad) for a = 750, so it either
-# carries a factor of two or predates the machine's acceleration doubling.
+# Confirmed rather than inferred, once depth went into the periodic one-liner:
+# held reaches 10-13 against this target of 12. So the planner does fill to it,
+# and at six it was filling to six and stopping there.
 #
-# What the machine actually shows is depth far under target: feed dropping
-# 9000 -> 7146 and 12000 -> 8958 works back to roughly two blocks chained, and
-# the trace tables showed free at 125-128 of 128 while the target said six.
-# The fault is that the target is not reached, not that it is too low.
-#
-# Twelve is kept for now only because a depth that undershoots its target
-# proportionally would still gain from a higher one, and that is exactly what
-# the depth figure now in the periodic one-liner distinguishes: if held sits
-# near twelve the target was the limiter, and if it sits near two the target
-# is irrelevant and the fill is what to look at. Set this back to 6 once that
-# run says which.
+# (The sqrt(1500 x d) written further up is sqrt(2ad) for a = 750, so it either
+# carries a factor of two or predates $120 doubling along with $110.)
 PLANNER_TARGET_BLOCKS = 12
 
 # Ceiling on how far above the drain rate to emit, reached only when the
