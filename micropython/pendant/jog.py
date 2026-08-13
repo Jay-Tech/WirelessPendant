@@ -197,30 +197,6 @@ PLANNER_FILL_RATIO = 2.0
 # step.
 RUNAHEAD_LIMIT_S = 0.5
 
-# The same bound over ESP-NOW, where the link is quicker and the floor under it
-# is correspondingly lower.
-#
-# The bound has to clear depth plus a worst-case round trip, or it gates the
-# fill instead of guarding the run-off. Depth is 0.24 s - PLANNER_TARGET_BLOCKS
-# times the tick, whatever the feed or step - and the round trip is what the
-# transport costs:
-#
-#   WiFi at the machine    68-222 ms  ->  floor 0.25-0.46 s  ->  0.5 needed
-#   ESP-NOW on the bench    10-60 ms  ->  floor 0.19-0.30 s  ->  0.35 clears
-#
-# 0.35 was tried on WiFi and pinched, which is exactly what the arithmetic
-# above says it should have done. It is not a value that was wrong; it was a
-# value that needed a quicker link before it could be right.
-#
-# Set per transport rather than globally because the WiFi path is the
-# documented fallback. A single 0.35 would leave that fallback gating its own
-# fill, so falling back would mean falling back to something worse than it was
-# - which is not a fallback.
-#
-# Whichever applies is copied to the scheduler at startup. The bound is a
-# property of the link, and this is the only constant here that is.
-RUNAHEAD_LIMIT_ESPNOW_S = 0.35
-
 # Floor under that bound, in millimetres.
 #
 # The measured lag is not all deliberate. Wifi, the sender's buffer, the
@@ -435,10 +411,6 @@ class JogScheduler:
         self.planner_capacity = 0     # largest free count seen = empty planner
         self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
-        # Overwritten at startup for a quicker transport. An instance value
-        # rather than the constant, because the bound tracks the link's round
-        # trip and the link is chosen after this is built.
-        self.runahead_limit_s = RUNAHEAD_LIMIT_S
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -779,7 +751,7 @@ class JogScheduler:
             # Run-ahead is bounded before depth is even consulted. Filling is
             # what puts the machine behind the hand, so once it is far enough
             # behind there is nothing a shallow planner can justify.
-            runahead_mm = (self.feed / 60.0) * self.runahead_limit_s
+            runahead_mm = (self.feed / 60.0) * RUNAHEAD_LIMIT_S
             if runahead_mm < MIN_RUNAHEAD_MM:
                 runahead_mm = MIN_RUNAHEAD_MM
             if self.planner_capacity and self.lag_mm <= runahead_mm:
