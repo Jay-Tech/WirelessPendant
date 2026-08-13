@@ -15,10 +15,12 @@ swapped:
 * **Discovery replaces addressing.** No host, no port, no DHCP, nothing in
   secrets.py. The pendant broadcasts until a receiver answers and then
   unicasts to whoever did.
-* **Sends are acknowledged at the MAC layer.** ESP-NOW reports whether the
-  packet reached the other radio, which a socket could never tell us. A
-  failure here is unambiguously a link problem, where a missing reply over TCP
-  might have been either end.
+* **Sends do not wait to find out whether they landed.** ESP-NOW can report
+  delivery at the MAC layer, and that looked like the one thing a socket could
+  never give us - but the call that reports it also waits out the retry
+  timeout when a packet is lost, tens of milliseconds with the event loop
+  behind it. In a shop rather than on a bench that made the pendant unusable.
+  Sends are fire-and-forget, and liveness comes from what arrives.
 * **No association, so no channel negotiation.** Both boards drop any WiFi
   association and sit on the default channel. Two boards joined to different
   access points would never hear each other, and it would present as range.
@@ -116,7 +118,7 @@ class PendantLink:
         self.on_message = on_message
         self.connected = False
         self.stats = {"sent": 0, "received": 0, "dropped": 0, "sessions": 0,
-                      "unacked": 0}
+                      "failed": 0}
 
         self._link = None
         self._peer = None
@@ -124,19 +126,6 @@ class PendantLink:
         self._limit = queue_limit
         self._decoder = protocol.LineDecoder()
         self._last_rx = 0
-        # Last time a unicast send was acknowledged by the peer's radio.
-        #
-        # Liveness here is not "did anything arrive", which is what a socket
-        # forces you to use. ESP-NOW acknowledges every unicast at the MAC
-        # layer, so a successful send is direct proof the other radio is
-        # listening - available even when the far end has nothing to say.
-        #
-        # Without this the link tore itself down every RX_TIMEOUT_S whenever
-        # the sender was quiet, and then could not recover: rediscovery needs
-        # the receiver to answer, and the receiver had already learned this
-        # MAC and stopped answering. Seen on the bench as two hellos, a mode,
-        # a ping, and then broadcasts forever.
-        self._last_ack = 0
         self._ping_seq = 0
 
     # --- outbound ---------------------------------------------------------
@@ -166,9 +155,9 @@ class PendantLink:
 
     def _drop_peer(self, reason):
         if self._peer is not None:
-            log("link down ({}) - sent={} received={} unacked={}".format(
+            log("link down ({}) - sent={} received={} failed={}".format(
                 reason, self.stats["sent"], self.stats["received"],
-                self.stats["unacked"]))
+                self.stats["failed"]))
         self._peer = None
         self.connected = False
         # Anything queued now is stale operator input: detents from a wheel
@@ -190,25 +179,37 @@ class PendantLink:
         self.connected = True
         self.stats["sessions"] += 1
         self._last_rx = time.ticks_ms()
-        self._last_ack = self._last_rx
         log("receiver {} - link up".format(mac_str(host)))
         self._queue = [protocol.hello()]
 
     def _transmit(self, peer, payload):
-        """One packet. Returns whether the other radio acknowledged it."""
+        """One packet, handed to the radio without waiting for it to land.
+
+        The return says whether the radio accepted the packet for sending, not
+        whether the peer received it - a queue full or an unregistered peer
+        fails here, a packet lost in the air does not.
+        """
         if len(payload) > MAX_PAYLOAD:
             self.stats["dropped"] += 1
             return True                 # not a link failure, so do not tear down
         try:
-            acked = bool(self._link.send(peer, payload))
+            # sync=False. The default waits for the peer's radio to
+            # acknowledge, and when a packet is not acknowledged it waits out
+            # the retry timeout first - tens of milliseconds, inside one call,
+            # with the whole event loop behind it.
+            #
+            # That is affordable on a bench where nothing is lost and ruinous
+            # in a shop where things are: measured as 27 loop stalls to 109 ms
+            # at the machine against 1 on WiFi, with the reported feed at zero
+            # and the planner never filling. Yielding between sends did not
+            # help and could not, because the block is inside a single send.
+            #
+            # What this gives up is per-packet delivery information. Liveness
+            # comes from what arrives instead - see _deadline.
+            self._link.send(peer, payload, False)
+            return True
         except OSError:
             return False
-        # Only unicast to the current peer counts as evidence. A broadcast is
-        # reported successful whether or not anything heard it, since there is
-        # nobody specific to acknowledge it.
-        if acked and peer == self._peer:
-            self._last_ack = time.ticks_ms()
-        return acked
 
     # --- the three loops --------------------------------------------------
 
@@ -264,11 +265,10 @@ class PendantLink:
                 if self._transmit(self._peer, protocol.encode(message)):
                     self.stats["sent"] += 1
                 else:
-                    # Unacknowledged means the packet never reached the other
-                    # radio. Counted rather than retried: a stale jog resent is
-                    # worse than a jog lost, and the deadline below will drop
-                    # the peer if this is more than a glitch.
-                    self.stats["unacked"] += 1
+                    # The radio refused the packet outright - a queue full or
+                    # an unregistered peer, not a delivery failure, which is no
+                    # longer something a send can report.
+                    self.stats["failed"] += 1
                 # Yield between sends. ESPNow.send() is synchronous - it waits
                 # for the peer's radio to acknowledge - so draining a backlog
                 # without this is that many blocking radio waits back to back
@@ -296,18 +296,17 @@ class PendantLink:
             await asyncio.sleep_ms(500)
             if self._peer is None:
                 continue
-            # Whichever kind of evidence is more recent. A sender with nothing
-            # to say leaves _last_rx stale while the peer is demonstrably
-            # there, and tearing the link down for that is what produced two
-            # hellos and then broadcasts forever on the bench - with
-            # unacked=0 in the very message announcing the link was dead.
-            now = time.ticks_ms()
-            idle_ms = min(time.ticks_diff(now, self._last_rx),
-                          time.ticks_diff(now, self._last_ack))
+            # Back to what arrives, now that sends no longer wait to find out
+            # whether they landed.
+            #
+            # This was briefly acknowledgement-based, because a silent sender
+            # used to tear down a working link. What made that unnecessary is
+            # the receiver's own keepalive: it answers whenever it has been
+            # quiet for two seconds, so something arrives well inside this
+            # timeout whether or not the sender has anything to say.
+            idle_ms = time.ticks_diff(time.ticks_ms(), self._last_rx)
             if idle_ms > RX_TIMEOUT_S * 1000:
-                self._drop_peer(
-                    "no traffic and no acknowledgement for {}s".format(
-                        RX_TIMEOUT_S))
+                self._drop_peer("nothing heard for {}s".format(RX_TIMEOUT_S))
 
     async def run(self):
         """Hold the link open forever, rediscovering as needed."""
