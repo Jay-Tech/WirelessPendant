@@ -200,6 +200,22 @@ SPI_BAUD = 20_000_000
 # one run rather than reason about it.
 DISPLAY_REFRESH_MS = 100
 
+# Refresh interval while traversing, and the commanded feed that counts as
+# traversing.
+#
+# Measured: with refresh off entirely the stumble at 0.1 mm went away and the
+# coarse steps improved markedly, so the redraw was the largest single thing
+# holding the loop. Off is not an option though - a pendant whose DRO freezes
+# while it moves is worse than one that stumbles.
+#
+# Scaling by feed serves both cases instead of trading one for the other. Above
+# a traverse feed the digits change faster than anyone can read them, so a
+# fifth of the rate costs nothing that was being used; below it the operator is
+# placing the tool and wants the numbers live - and a missed tick there is
+# 0.1 mm rather than 3 mm, so the same block hurts proportionally less.
+DISPLAY_REFRESH_TRAVERSE_MS = 500
+DISPLAY_TRAVERSE_FEED = 2000.0
+
 # A reported feed below this share of the commanded one, while the commanded
 # feed is meaningful, counts as the machine failing to hold what it was asked
 # for rather than simply moving slowly.
@@ -585,16 +601,33 @@ async def refresh_display():
 
     while True:
         try:
+            # Yield between fields. Each set_* is a blocking SPI write, and
+            # run back to back they were one uninterrupted block long enough to
+            # cost four jog ticks - measured at 82 ms, against a 20 ms tick.
+            # Broken up, the scheduler can run between them, and the panel
+            # takes the same total time to paint either way.
+            #
+            # This is the whole of it: with the refresh switched off the loop
+            # reported stall=0/0ms for an entire session, where the same run
+            # with it on reported fourteen.
             screen.set_link(pendant_link.connected if pendant_link else False)
+            await asyncio.sleep_ms(0)
             screen.set_state(state["machine_state"])
+            await asyncio.sleep_ms(0)
             screen.set_mode(scheduler.axis, scheduler.step,
                             scheduler.feed)
+            await asyncio.sleep_ms(0)
             if state["dro"]:
                 screen.set_position(state["dro"])
         except Exception as exc:
             link.log("display error: {}: {}".format(type(exc).__name__, exc))
             return
-        await asyncio.sleep_ms(DISPLAY_REFRESH_MS)
+        # Slower while traversing, where the digits are a blur anyway, and
+        # unchanged at the feeds where the operator is placing the tool.
+        traversing = scheduler is not None and \
+            scheduler.feed >= DISPLAY_TRAVERSE_FEED
+        await asyncio.sleep_ms(DISPLAY_REFRESH_TRAVERSE_MS if traversing
+                               else DISPLAY_REFRESH_MS)
 
 
 async def publish_mode():
