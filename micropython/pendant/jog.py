@@ -303,7 +303,25 @@ FEED_DEADBAND = 0.10
 # So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
 # only fully usable below about 250 detents/s. That is a property of the wheel
 # and the machine, not something a ceiling can fix.
-STEP_MAX_FEED = (150.0, 250.0, 2500.0, 9000.0, 12000.0)
+#
+# The coarse pair came down from 9000 and 12000 to buy back run-off. Once the
+# planner depth target was raised the motion went smooth, and the bill arrived
+# as coast: about 0.73 s at 1 mm and F12000, which is 133 mm of table after the
+# hand stops.
+#
+# Run-off scales with speed and this is the cheapest place to spend it. Depth
+# holds twelve blocks whatever the feed, but a block is what the commanded feed
+# drains in a tick, so lowering the ceiling shortens every block with it:
+#
+#   1.0 mm at 12000 -> 4.0 mm blocks -> 52 mm of depth, 13 mm to decelerate
+#   1.0 mm at 10000 -> 3.0 mm blocks -> 36 mm of depth,  9 mm to decelerate
+#   0.5 mm at  9000 -> 3.0 mm blocks -> 36 mm of depth
+#   0.5 mm at  8000 -> 2.5 mm blocks -> 30 mm of depth
+#
+# Deliberately a trim rather than a cut. 12000 at 1 mm is genuinely wanted for
+# traversing the length of the table, so this keeps most of the top end and
+# takes roughly a quarter of the coast rather than halving both.
+STEP_MAX_FEED = (150.0, 250.0, 2500.0, 8000.0, 10000.0)
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.

@@ -480,7 +480,17 @@ def first_feed(detents_per_second, step=0.5, idle=40):
 # climbs for nine ticks. On the machine that is having to spin the wheel a while
 # before anything happens.
 fast = first_feed(280)          # a hard wind
-check("a hard start reaches speed on the first tick", fast > 8000, True)
+# Against the ceiling rather than a literal. 280 detents/s quantises to 6 per
+# tick, which demands 9000 at 0.5 mm - more than the step is allowed - so what
+# "full speed" means here is the ceiling, whatever it currently is. The bare
+# 8000 that used to stand here was chosen when that ceiling was 9000, and it
+# failed the moment the ceiling was trimmed to buy back run-off: a lower
+# ceiling reported as a feed-tracking regression, which is not what this
+# checks.
+opening_target = min(feed_for(per_tick(280), 0.5),
+                     STEP_MAX_FEED[STEP_SIZES.index(0.5)])
+check("a hard start reaches speed on the first tick",
+      fast >= opening_target * 0.95, True)
 check("  and a gentle one is proportional, not full speed",
       FEED_MIN_MM_MIN < first_feed(100) < fast, True)
 
