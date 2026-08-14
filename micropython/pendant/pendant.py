@@ -239,7 +239,8 @@ screen = None
 touch = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
-         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None, "lag_session": 0,
+         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
+         "lag_session": 0, "lag_last_cmd": None,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
          "planner_min": 999, "planner_max": 0, "bf_warned": False,
@@ -362,18 +363,41 @@ def update_lag(wpos):
     # that is rough and will not reach speed. Seen after restarting the sender:
     # only restarting the pendant cleared it, because that was the one thing
     # that reset this reference.
+    # And so does anything else moving the machine.
+    #
+    # This figure is the pendant's own commanded distance minus the machine's
+    # travel, which silently assumes the pendant is the only thing driving.
+    # It is not. The sender's jog buttons, a running job, homing, MDI, a second
+    # pendant - every millimetre any of them moves the axis reads here as the
+    # pendant falling behind, and the bound has no way to tell that motion from
+    # its own backlog.
+    #
+    # Measured: the operator jogged from the sender's panel while the pendant
+    # was connected, and the pendant reported 390 mm of lag it had not caused.
+    # That pinned the bound, discarded 92% of the wheel's detents, and did not
+    # recover - because it cannot. The machine can never catch up on distance
+    # the pendant never sent.
+    #
+    # So only measure while the pendant is the one driving. commanded_mm not
+    # advancing between two status frames means no jog was emitted in that
+    # window, so any travel in it belongs to somebody else and the reference
+    # starts again from wherever the machine now is.
+    commanded = scheduler.commanded_mm
     session = pendant_link.stats["sessions"] if pendant_link else 0
     reference = state["_ref"]
     if (reference is None or reference[0] != scheduler.axis
-            or session != state["lag_session"]):
+            or session != state["lag_session"]
+            or commanded == state["lag_last_cmd"]):
         state["lag_session"] = session
-        state["_ref"] = (scheduler.axis, wpos[index], scheduler.commanded_mm)
+        state["lag_last_cmd"] = commanded
+        state["_ref"] = (scheduler.axis, wpos[index], commanded)
         # Cleared rather than left to be overwritten next frame: the scheduler
         # reads this every tick and would spend the interval bounding itself
         # against a figure already known to be meaningless.
         state["lag_mm"] = 0.0
         scheduler.lag_mm = 0.0
         return
+    state["lag_last_cmd"] = commanded
 
     _, start_pos, start_cmd = reference
     lag = abs((scheduler.commanded_mm - start_cmd) - (wpos[index] - start_pos))
