@@ -259,10 +259,46 @@ but the general lesson stands: **the responder's count is the check on the
 pinger's, and only both terminals together can tell a late packet from a lost
 one.**
 
-Still open and unexplained: over ESP-NOW the pendant reports **11 loop stalls
-to 83 ms** where WiFi reports 1, in otherwise identical runs. Not perceptible
-while jogging, and no longer suspected of causing the bound failure, but it is
-transport-specific and nothing accounts for it.
+### The loop stalls are the backpressure. Do not remove them
+
+Over ESP-NOW the pendant reports around **twelve loop stalls a session, worst
+case 100 ms**, where WiFi reports one. That looked like a defect for a while.
+It is not, and this section exists so nobody tries to fix it again.
+
+Timing the sends found the cause immediately:
+
+    stall=1/38ms    tx=35/56ms
+    stall=12/100ms  tx=132/104ms
+
+`tx` counts sends taking half a jog tick or longer. 132 of them, worst 104 ms,
+against a worst stall of 100 ms - the same event. `ESPNow.send()` is
+synchronous: it waits for the peer's radio to acknowledge, inside the event
+loop, so the jog tick waits with it.
+
+**Removing the wait removed the stalls and made the pendant unusable.** With
+`sync=False` the `tx` counter stopped climbing after the first sample and the
+stall count froze, exactly as intended - and motion fell apart: planner depth
+0 of 5, lag pinned at 98.9 mm and never recovering, 67% of the operator's
+detents discarded. Rough at every step size.
+
+Because the blocking send *is the flow control*. It paces the pendant to what
+the radio can actually carry. Without it, messages go out faster than the link
+delivers them, whatever fails to arrive is distance the machine never travels
+while the pendant has already counted it, and that gap becomes permanent lag -
+which pins the run-ahead bound, starves the planner, and discards two thirds of
+the input.
+
+So a 104 ms send is the radio applying backpressure, and the loop stalling is
+how the pendant obeys it. The stall counter is measuring a working mechanism.
+
+Worth recording the shape of the mistake as well as the finding. Five changes
+were made to this transport chasing better numbers - a hysteresis band, three
+values of the run-ahead bound, and this - and all five were reverted after the
+machine disagreed. Every one optimised against something measurable: stall
+counts, latency percentiles, depth-plus-round-trip arithmetic. The measurements
+were sound each time; the inference from measurement to feel was not. **On this
+subsystem the operator's report is the ground truth and the counters are
+supporting evidence, not the other way round.**
 
 **PSRAM costs nothing.** Repeated on the `SPIRAM_OCT` build, where MicroPython's
 heap lives in external RAM rather than internal SRAM and could plausibly have
