@@ -10,9 +10,12 @@ Needs `secrets.py` on the board with WIFI_SSID, WIFI_PASSWORD and SENDER_HOST.
 Start the sender first (tools/mock_sender.py during development), then turn the
 wheel and watch the DRO move.
 
-To run on power-up, copy the modules to the board and this file as main.py:
+To run on power-up, install this file as main.py alongside the modules:
 
-    python tools/sync_board.py     # copies micropython/pendant/pendant.py as main.py
+    python tools/sync_board.py --main
+
+Without --main the sync copies the modules only, so a development run cannot
+quietly change what the board does when it is next switched on.
 
 No display or buttons are required; both degrade to nothing if absent.
 

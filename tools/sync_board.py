@@ -88,6 +88,9 @@ def main():
                         help="mpremote target, e.g. id:XXXX or COM5")
     parser.add_argument("--force", action="store_true",
                         help="copy everything, skipping the hash comparison")
+    parser.add_argument("--main", action="store_true",
+                        help="also install pendant.py as main.py, so the "
+                             "board runs the pendant on power-up")
     args = parser.parse_args()
 
     files = [PENDANT / name for name in MODULES] + EXTRA
@@ -114,9 +117,35 @@ def main():
         print("  copied {}".format(path.name))
         copied += 1
 
+    # main.py is deliberately not part of MODULES.
+    #
+    # Copying it every sync would make every development run also change what
+    # the board does when it is next switched on, which is a different decision
+    # and should be a deliberate one. It also cannot be hash-compared under its
+    # own name, since the source is pendant.py and the destination is main.py.
+    if args.main:
+        entry = PENDANT / "pendant.py"
+        current = remote.get("main.py") if remote is not None else None
+        if current == local_hash(entry):
+            print("  main.py already current")
+            skipped += 1
+        else:
+            code, output = mpremote(args.device, "fs", "cp",
+                                    str(entry), ":main.py")
+            if code != 0:
+                print("  FAILED main.py: {}".format(output))
+                return 1
+            print("  installed pendant.py as main.py")
+            copied += 1
+
     print("\n{} copied, {} already current".format(copied, skipped))
     if copied:
         print("restart the pendant for the new modules to take effect")
+    if args.main:
+        print("\nthe board will now run the pendant on power-up, with no PC.")
+        print("mpremote still interrupts it, so run_pendant.py works as before")
+        print("- and that is the only way to see the one-liner, since output")
+        print("goes nowhere when no host is attached.")
     return 0
 
 
