@@ -250,7 +250,7 @@ touch = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
-         "lag_session": 0, "lag_last_pos": None,
+         "lag_session": 0, "lag_last_pos": None, "frames_without_bf": 0,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
          "planner_min": 999, "planner_max": 0, "bf_warned": False,
@@ -275,7 +275,28 @@ def on_message(message):
     # place it matters. A buffer that never fills means the lookahead the
     # scheduler assumes it is building does not exist.
     free = message.get("bf")
-    if free is not None and scheduler is not None:
+    if free is None:
+        # Said once, when enough frames have arrived carrying no buffer field
+        # at all to be sure none ever will.
+        #
+        # It matters because without Bf: the pendant silently runs its degraded
+        # path: emission pinned at the drain rate, the planner a block or two
+        # deep, and motion that ripples for a reason nothing on screen explains.
+        #
+        # This used to sit inside the branch below, where the field is present -
+        # so it could only ever fire on a controller that does report Bf:, which
+        # is the opposite of what it warns about. What it actually caught was a
+        # zero, and zero is what the sender reports before it knows the
+        # machine's state, so starting the pendant before the sender produced
+        # the warning against a controller reporting Bf: perfectly. Judged on
+        # absence now, which is the condition it describes.
+        state["frames_without_bf"] += 1
+        if not state["bf_warned"] and state["frames_without_bf"] > 50:
+            state["bf_warned"] = True
+            link.log("controller is not reporting Bf: - planner depth is")
+            link.log("  unknown, so motion will be rougher. Enable the")
+            link.log("  buffer-state bit in $10 (add 2) and restart.")
+    elif scheduler is not None:
         state["planner_free"] = free
         scheduler.set_planner_free(free)
         if free:
@@ -283,21 +304,6 @@ def on_message(message):
                 state["planner_min"] = free
             if free > state["planner_max"]:
                 state["planner_max"] = free
-
-        # Said once, when enough frames have arrived to be sure. Judged on
-        # never having seen a non-zero count rather than on this frame being
-        # zero, because zero is also what a momentarily full planner reports -
-        # and warning on that would be both wrong and alarming.
-        #
-        # It matters because without Bf: the pendant silently runs its degraded
-        # path: emission pinned at the drain rate, the planner a block or two
-        # deep, and motion that ripples for a reason nothing on screen explains.
-        if (not state["bf_warned"] and state["status_frames"] > 20
-                and scheduler.planner_capacity == 0):
-            state["bf_warned"] = True
-            link.log("controller is not reporting Bf: - planner depth is")
-            link.log("  unknown, so motion will be rougher. Enable the")
-            link.log("  buffer-state bit in $10 (add 2) and restart.")
 
     # The sender's probe state: which corner it will use, and whether a cycle
     # is already running. Shown on the probe page so a hold never fires at a
