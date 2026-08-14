@@ -30,12 +30,11 @@ try:
     import link
     import protocol
     from buttons import ButtonPanel, PRESS, RELEASE, LONG_PRESS
-    from jog import JogScheduler, TICK_MS, RUNAHEAD_LIMIT_ESPNOW_S
+    from jog import JogScheduler, TICK_MS
 except ImportError:
     from pendant import link, protocol
     from pendant.buttons import ButtonPanel, PRESS, RELEASE, LONG_PRESS
-    from pendant.jog import (JogScheduler, TICK_MS,
-                             RUNAHEAD_LIMIT_ESPNOW_S)
+    from pendant.jog import JogScheduler, TICK_MS
 
 import secrets
 import sys
@@ -808,14 +807,7 @@ async def main():
         # receiver answers, so there is nothing here to get wrong in secrets.py
         # and nothing to change when the PC's address does.
         pendant_link = espnow_link.PendantLink(on_message=on_message)
-        # The bound has to clear depth plus a worst-case round trip, and
-        # ESP-NOW's worst case at the machine is 139 ms against WiFi's 222.
-        # The bound is what sets the run-off, so this is the whole of what the
-        # quicker link buys - and it is about 10%, not the 30% the medians
-        # suggest. See RUNAHEAD_LIMIT_ESPNOW_S.
-        scheduler.runahead_limit_s = RUNAHEAD_LIMIT_ESPNOW_S
-        link.log("ESP-NOW - looking for a receiver (run-ahead {}s)".format(
-            scheduler.runahead_limit_s))
+        link.log("ESP-NOW - looking for a receiver")
     else:
         ip = link.wifi_connect(
             secrets.WIFI_SSID, secrets.WIFI_PASSWORD,

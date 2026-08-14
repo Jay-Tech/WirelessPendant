@@ -235,6 +235,20 @@ which were confidently diagnosed and wrong - just a bench number used where a
 shop number was required. **~0.45 is what the measurement supports**, worth
 about 10% of the run-off rather than the 30% predicted from bench figures.
 
+**0.45 was then tried at the machine, and the bound stays at 0.5.** The numbers
+moved as predicted - peak lag 102 mm down to 88, about 14% - and none of it was
+worth having: the operator reported 0.5 as the smoothest of the two with no
+noticeable difference in run-off. Reverted, and the per-transport mechanism
+with it, since there is now no second value to carry.
+
+So the run-ahead bound cannot be moved by changing transport, and that is the
+final word on it. The reason is in the table above: the bound is sized by the
+worst case, ESP-NOW's worst case is 139 ms against WiFi's 222, and 83 ms of
+headroom on a 0.24 s depth is not enough to matter. **ESP-NOW's value is
+reproducibility. It is not a performance change, and three separate attempts
+to spend it as one have now failed** - once on a bench extrapolation, once on
+a wrong maximum, and once at a value the measurement did support.
+
 One caution for anyone re-running this. The first attempt reported 108/200
 received and 90 "acknowledged but never answered", which read as catastrophic
 asymmetric loss and produced two hardware conclusions before the responder's
