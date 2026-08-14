@@ -198,21 +198,57 @@ That leaves the reproducibility argument as the whole case for ESP-NOW, exactly
 as the section above concluded - now with the reassurance that adopting it
 costs nothing in feel.
 
-**One attempt to convert the faster link into less run-off failed, and is
-unexplained.** The bound has to clear planner depth plus a worst-case round
-trip; depth is a fixed 0.24 s, so on paper ESP-NOW's quicker link should allow
-0.35 s where WiFi needs 0.5. Tried at the machine it was worse, and then
-unusable. Reverted.
+### ESP-NOW measured in the shop, at last
 
-Two candidates, and the tools to separate them do not exist yet. Either depth
-costs more than 0.24 s in practice, or **ESP-NOW at the machine is nothing like
-ESP-NOW on the bench** - and every ESP-NOW figure in this document is a bench
-figure. The second is easy to test and has never been done.
+Every ESP-NOW figure above was taken on a bench. Repeated at the machine, at
+two positions, with the responder's own counts as the check:
 
-A related loose end pointing the same way: over ESP-NOW the pendant reports
-**11 loop stalls to 83 ms** where WiFi reports 1, in otherwise identical runs.
-Not perceptible while jogging, but it is transport-specific and it is the most
-likely reason the bound behaved unlike its arithmetic.
+| | bench | shop, near | shop, far |
+|---|---|---|---|
+| median | 9.76 | 9.86 | 9.86 |
+| p90 | 19.82 | 29.63 | 29.84 |
+| p99 | 59.77 | 79.97 | 59.78 |
+| **max** | **60.12** | **139.39** | **89.84** |
+
+Four replies unacknowledged across roughly 400 - about **1% loss** - and the
+medians are indistinguishable from the bench. The link is good in the shop.
+
+**The tail is not.** The maximum is twice the bench figure, and that is the
+number that matters, for a reason worth stating plainly because it inverts the
+headline comparison at the top of this document:
+
+- **median**: ESP-NOW 9.86 against TCP's 68, about **7x** better
+- **maximum**: ESP-NOW 139 against TCP's 222, about **1.6x** better
+
+The 7x is what makes ESP-NOW look compelling. The 1.6x is what it can actually
+be spent on, because everything downstream is sized against the worst case
+rather than the typical one.
+
+That resolves the failed bound. It has to clear planner depth plus a worst-case
+round trip, and depth is a fixed 0.24 s:
+
+    bench maximum:  0.24 + 0.060 = 0.30 s   ->  0.35 clears it
+    shop maximum:   0.24 + 0.139 = 0.38 s   ->  0.35 cuts into it
+
+Sized from the wrong maximum. Not RF loss, not a blocking radio call, both of
+which were confidently diagnosed and wrong - just a bench number used where a
+shop number was required. **~0.45 is what the measurement supports**, worth
+about 10% of the run-off rather than the 30% predicted from bench figures.
+
+One caution for anyone re-running this. The first attempt reported 108/200
+received and 90 "acknowledged but never answered", which read as catastrophic
+asymmetric loss and produced two hardware conclusions before the responder's
+own terminal contradicted both. The pinger matched replies against a sequence
+byte and never resynchronised, so a single late answer put the stream
+permanently off by one. Fixed, and late replies are now counted separately -
+but the general lesson stands: **the responder's count is the check on the
+pinger's, and only both terminals together can tell a late packet from a lost
+one.**
+
+Still open and unexplained: over ESP-NOW the pendant reports **11 loop stalls
+to 83 ms** where WiFi reports 1, in otherwise identical runs. Not perceptible
+while jogging, and no longer suspected of causing the bound failure, but it is
+transport-specific and nothing accounts for it.
 
 **PSRAM costs nothing.** Repeated on the `SPIRAM_OCT` build, where MicroPython's
 heap lives in external RAM rather than internal SRAM and could plausibly have
@@ -300,19 +336,12 @@ fighting it.
 - ~~**ESP-NOW at the machine.**~~ Done as far as *feel* goes: it drives the
   machine, at parity with WiFi, with slightly less run-off. See above.
 
-  **What is still unmeasured is its latency there.** Every ESP-NOW number in
-  this document - the 9.76 ms median, the 59.77 ms p99 - was taken on a bench.
-  Two findings now point at the shop being different: a run-ahead bound sized
-  from those figures made motion worse rather than better, and the pendant
-  reports eleven loop stalls over ESP-NOW where WiFi reports one.
+  ~~**What is still unmeasured is its latency there.**~~ Measured: medians
+  matching the bench, about 1% loss, and a tail twice as long as the bench's.
+  See above. That accounts for the run-ahead bound that failed, and it caps how
+  much the quicker link can buy at roughly 10% of the run-off.
 
-  `selftest_espnow.py` answers it directly and has never been run in the shop.
-  It needs both boards temporarily running it instead of their real firmware -
-  `ROLE = "respond"` on the receiver, `ROLE = "ping"` on the pendant - so it is
-  a deliberate exercise rather than something to slip into a jogging session.
-  Worth doing before anyone argues about that bound again.
-
-  Also still open, and unaffected by any of the above: whether the IPEX
+  Still open, and unaffected by any of the above: whether the IPEX
   external antenna earns its place. On WiFi at the machine the board reported
   **-37 to -62 dBm** depending on where it was held, with zero lost packets at
   either end of that range - comfortable, and suggesting the internal antenna
