@@ -398,13 +398,36 @@ fighting it.
   is adequate here. But that is a different protocol on a different band plan,
   and says nothing about a shop with more steel in the path.
 - **Pairing.** ESP-NOW addresses by MAC. Needs a story for someone who owns two.
-- **Sender transport.** `PendantService` becomes a serial reader rather than a
-  TCP listener. The JSON-lines protocol can stay as it is. Half done: the
-  service now writes through an `IPendantChannel` rather than a `NetworkStream`,
-  so the serial implementation is an addition beside the TCP one rather than a
-  change to it. Both transports stay, one pendant active at a time, newest
-  wins - claimed by the accept on TCP and by the `hello` on serial, since the
-  receiver's port is open whether or not a pendant is switched on.
+- ~~**Sender transport.**~~ Done. `PendantService` reads the receiver's serial
+  port as well as listening on TCP, through an `IPendantChannel` that made the
+  serial implementation an addition beside the TCP one rather than a change to
+  it. The JSON-lines protocol did not change at all. Both transports stay, one
+  pendant active at a time, newest wins - claimed by the accept on TCP and by
+  the `hello` on serial, since the receiver's port is open whether or not a
+  pendant is switched on.
+
+  `tools/espnow_bridge.py` is retired by this and must not be left running: the
+  port is exclusive, so it and the sender cannot both hold it.
+
+  Verified against a receiver end to end - port opened and held, the start-up
+  `rx_note` parsed without faulting, clean shutdown. **Not** yet driven by a
+  pendant over the radio, which is the half that remains.
+- **Registering a board should be one command.** Setting up a receiver is
+  currently: run `tools/board.py`, read a serial number off the screen, paste it
+  into `BOARDS`, then `sync_board.py --receiver`. The paste is the only manual
+  step in an otherwise scripted process, and it is the one most likely to be got
+  wrong - the ids are sixteen hex digits and the two ESP32-S3s enumerate
+  identically, so a slip puts the receiver's firmware on the pendant.
+
+  A `--register <name>` writing the attached board's id straight into `BOARDS`
+  would collapse those two steps into one. It would also retire two notes that
+  exist only because the step is manual: the "every id in BOARDS is this
+  bench's" warning in `board.py`, and the matching first-time paragraph in the
+  README.
+
+  Deliberately not built yet. Every id in `BOARDS` is still this bench's, and
+  what defaults to ship is not knowable until the hardware is settled -
+  automating the paste before then automates a shape that is still moving.
 - **Broadcast the jog messages.** The most promising untried idea on this link.
 
   ESP-NOW unicast is acknowledged and retried at the 802.11 MAC layer, and that

@@ -43,7 +43,16 @@ BOARDS = {
                                         # says what it is rather than what
                                         # chip is on it
     "receiver": "id:ACA7042DFB100000",  # ESP32-S3, the ESP-NOW end at the PC
+    "receiver2": "id:68EE8F50B2840000", # second one, on the bench, for testing
+                                        # toward the production unit
 }
+
+# Names beginning "receiver" are the ESP-NOW end at the PC, and the prefix is
+# load-bearing rather than descriptive: `sync_board.py --receiver` will only
+# install receiver.py as main.py on a board named this way. Every ESP32-S3 here
+# enumerates identically, so that name is the only guard against replacing the
+# pendant's entry point with the receiver's - which fails silently, and later.
+RECEIVER_PREFIX = "receiver"
 
 # Which one a tool talks to when nothing says otherwise. Both are live: the
 # ESP32 is where the pendant is going, and the Pico is the reference it gets
@@ -165,9 +174,11 @@ def main():
     if not any(serial.lower() in d.lower() for _, d in devices):
         print()
         print("warning: {} is not among them.".format(target))
-        print("  Set PICO_DEVICE to one of the IDs above rather than reaching")
-        print("  for `connect auto`, which would target whichever device is")
-        print("  first - possibly the controller.")
+        print("  Every id in BOARDS above is this bench's. On a new setup they")
+        print("  are all wrong: copy the ids from 'attached' into BOARDS, which")
+        print("  fixes it for good. PICO_DEVICE only redirects one session.")
+        print("  Either way, not `connect auto` - that targets whichever device")
+        print("  is first, possibly the controller.")
         return 1
     return 0
 

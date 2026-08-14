@@ -27,6 +27,8 @@ Three things that bite people on this specific board:
 
 ## Flashing MicroPython
 
+### Pico 2 W
+
 1. Download the Pico 2 W `.uf2` from
    [micropython.org/download/RPI_PICO2_W](https://micropython.org/download/RPI_PICO2_W/)
    (current release: **v1.28.0**). Make sure it's the `RPI_PICO2_W` build —
@@ -39,6 +41,47 @@ Three things that bite people on this specific board:
 If the board misbehaves after switching between Arm and RISC-V builds, or
 between MicroPython and C SDK firmware, flash `flash_nuke.uf2` first to wipe
 the flash, then reflash. Leftover filesystem blocks confuse the new firmware.
+
+### ESP32-S3
+
+Both the pendant and the receiver are ESP32-S3s, and neither takes a `.uf2` —
+there is no BOOTSEL drive to drag a file onto, so flashing goes over the serial
+port with `esptool`. The build this repo runs is committed at the root:
+`ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin`.
+
+```bash
+python -m pip install esptool
+```
+
+Put the board into its ROM bootloader: hold **BOOT**, tap **RESET**, release
+**BOOT**. It re-enumerates as `303a:1001`, which `tools/board.py` labels
+*"ROM bootloader — esptool, not mpremote"*. In MicroPython it is `303a:4001`
+instead, and `esptool` will not talk to that one.
+
+Then find the port it came up on — and look it up again rather than reusing what
+it had a moment ago. The bootloader and MicroPython present different USB
+descriptors, so Windows renumbers the board every time it is flashed. That is
+also why every tool here targets a serial number instead of a COM port.
+
+```bash
+python -m esptool --chip esp32s3 --port COM# erase_flash
+```
+
+```bash
+python -m esptool --chip esp32s3 --port COM# --baud 460800 write_flash -z 0 ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
+```
+
+Offset `0`, not the `0x1000` the original ESP32 takes.
+
+Reset the board and it comes up in MicroPython with a new serial number. Add
+that to `BOARDS` in [`tools/board.py`](tools/board.py): every S3 here enumerates
+identically, so the serial number is the only thing that distinguishes the
+pendant from a receiver, and every tool resolves through that table.
+
+**Building this for the first time?** Every id in `BOARDS` is this bench's, so
+all of them are wrong for you — expect to replace `pendant` and `receiver` with
+your own before any tool here works. `python tools/board.py` lists what is
+attached and says so when the configured board is not among them.
 
 ## Running the smoke test
 
@@ -320,6 +363,90 @@ Three things it handles that a plain socket does not:
 - **Flush before close.** Closing a socket discards whatever is still queued,
   so `flush()` exists and any orderly shutdown must call it. Skipping it loses
   the last few messages silently, after they have already been counted as sent.
+
+### ESP-NOW receiver
+
+The other transport, and the one the pendant is moving to. Instead of joining
+the shop WiFi it talks ESP-NOW straight to a second ESP32-S3 plugged into the
+sender's PC, which presents a serial port. What crosses that port is exactly
+what crossed the TCP socket — the same newline-delimited JSON — so the sender
+reads a different transport and the protocol itself does not change.
+
+[`micropython/receiver/receiver.py`](micropython/receiver/receiver.py) is the
+whole of it, and it is one file with no dependencies: it imports only `sys`,
+`select`, `time`, `network` and `espnow`, all built into the ESP32 port. No
+`secrets.py` either, since ESP-NOW needs no credentials.
+
+Setting up the receiver, after flashing MicroPython above:
+
+1. See what is attached, and note the board's serial number:
+
+```bash
+python tools/board.py
+```
+
+2. Set `receiver` in `BOARDS` in [`tools/board.py`](tools/board.py) to that
+   `id:`.
+3. Install it:
+
+```bash
+python tools/sync_board.py --receiver
+```
+
+4. Reset or replug the board.
+
+Step 4 is easy to skip and looks like a failure when you do. `mpremote` leaves
+the board in the REPL, so `main.py` is installed but not yet running — set one
+up in place, look at the port, and a silent port reads as a bad install. Moving
+the board to the shop PC resets it anyway, so this only bites when bench-testing
+where you flashed it.
+
+Step 3 copies `receiver.py` as `main.py` and nothing else, so the board comes up
+on its own when the shop PC powers on, which is the whole point of it. Unlike
+the pendant's `--main` there is no opt-in, because there is no development mode
+to protect here.
+
+It targets the board named `receiver` and ignores `PICO_DEVICE`. If you keep
+more than one — a spare, or a bench board — name the others `receiver2`,
+`receiver3` and select them with `--device receiver2`. The prefix is
+load-bearing rather than descriptive: this refuses to run against a board whose
+name does not begin `receiver`. Every S3 enumerates identically, so that name is
+the only guard against writing the receiver's entry point over the pendant's — a
+mistake that is silent at the time and shows up later as a pendant that does
+nothing.
+
+To watch it run without installing it:
+
+```bash
+python tools/on_board.py micropython/receiver/receiver.py --device receiver2 --no-sync
+```
+
+`--no-sync` matters: without it `on_board.py` copies the pendant's modules
+first, which the receiver neither imports nor needs.
+
+Pairing takes no configuration. The pendant broadcasts until something answers;
+the receiver learns its MAC from the first packet and unicasts back. A pendant
+that reboots keeps its MAC, so the receiver also answers a familiar peer that
+has gone quiet — without that it would ignore the rebooted pendant's broadcasts
+and never re-pair.
+
+The receiver writes its own diagnostics into the same stream as
+`{"t":"rx_note","msg":...}` rather than as bare prints, which would land
+mid-protocol and read as a malformed line. The sender shows them as
+`[Pendant] Receiver: …`. On power-up you should see:
+
+```
+{"t":"rx_note","msg":"receiver up, this board is 68:EE:8F:50:B2:84"}
+```
+
+and the pendant's MAC when one pairs. Those two lines are what to look at when
+pairing is not working.
+
+Only one thing may hold the port. The sender, `mpremote` and
+[`tools/espnow_bridge.py`](tools/espnow_bridge.py) all open it exclusively, so
+`sync_board.py` reporting *"could not read the board"* usually means the sender
+is running. The bridge is retired now that the sender reads the port itself, and
+must not be left running alongside it.
 
 ### Mock sender
 
