@@ -175,6 +175,16 @@ STALL_WARN_MS = 30
 # its own findings, the same trap the jog trace tables fell into.
 STALL_LOG_BUDGET = 3
 
+# A step in the reported position larger than this is a discontinuity rather
+# than motion, and invalidates the lag reference. See update_lag().
+#
+# Sized well clear of anything real: $110 is 15000, so 250 mm/s, and status
+# arrives at 10 Hz - 25 mm between frames at absolute maximum feed. Double
+# that again for a late frame and this still cannot fire on genuine travel,
+# while catching a work offset change or a sender that has not yet learned
+# where the machine is.
+POSITION_JUMP_MM = 50.0
+
 # Which panel is fitted. "st7796" is the MSP3525/MSP3526 3.5" 320x480 IPS;
 # "ili9341" is the 2.4" 320x240 it replaced, kept because it is the fallback
 # if the new one is ever out of the loop.
@@ -239,7 +249,8 @@ screen = None
 touch = None
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
-         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None, "lag_session": 0,
+         "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
+         "lag_session": 0, "lag_last_pos": None,
          "lag_enabled": True, "actual_feed": 0, "feed_collapses": 0,
          "last_collapse_dump": -60000, "planner_free": 0,
          "planner_min": 999, "planner_max": 0, "bf_warned": False,
@@ -362,10 +373,40 @@ def update_lag(wpos):
     # that is rough and will not reach speed. Seen after restarting the sender:
     # only restarting the pendant cleared it, because that was the one thing
     # that reset this reference.
+    # And so does the position jumping somewhere it cannot have travelled.
+    #
+    # This measures a difference between two running totals, so it is only
+    # meaningful while both describe the same continuous motion. Anything that
+    # moves the reported position without the pendant commanding it - a work
+    # offset changing, homing, or the sender reporting before it knows where
+    # the machine is - shifts one total and not the other, and the difference
+    # is then a permanent offset that reads as lag and never decays.
+    #
+    # Measured: the pendant was started before the sender, and on the first
+    # status it took its reference against a zeroed DRO - the sender emits
+    # 0.000 before it has the real position, seen directly during an earlier
+    # reconnect. The machine was at X+384, the pendant reported 390.5 mm of
+    # lag against 12 mm of commanded travel, the bound pinned, and 92% of the
+    # wheel's detents were discarded until it was restarted.
+    #
+    # Zeroing an axis does the same thing, and that is on this pendant's own
+    # button: the work offset changes, wpos steps to zero, and a few hundred
+    # millimetres of phantom lag arrive with it.
+    #
+    # No axis here travels POSITION_JUMP_MM between two status frames - $110 is
+    # 15000, so 250 mm/s, and status arrives at 10 Hz, which is 25 mm flat out.
+    # A larger step is a discontinuity rather than motion, and the reference
+    # starts again from wherever the machine now says it is. A false positive
+    # costs one re-reference; a false negative costs the session.
+    previous = state["lag_last_pos"]
+    jumped = (previous is not None
+              and abs(wpos[index] - previous) > POSITION_JUMP_MM)
+    state["lag_last_pos"] = wpos[index]
+
     session = pendant_link.stats["sessions"] if pendant_link else 0
     reference = state["_ref"]
     if (reference is None or reference[0] != scheduler.axis
-            or session != state["lag_session"]):
+            or session != state["lag_session"] or jumped):
         state["lag_session"] = session
         state["_ref"] = (scheduler.axis, wpos[index], scheduler.commanded_mm)
         # Cleared rather than left to be overwritten next frame: the scheduler
