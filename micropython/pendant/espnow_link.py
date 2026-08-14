@@ -69,6 +69,11 @@ QUEUE_LIMIT = 32
 # order of magnitude longer.
 POLL_MS = 2
 
+# A send taking this long or more is worth counting. Half a jog tick: at that
+# point the call has cost the scheduler a turn, which is the unit that matters
+# here rather than any absolute figure.
+SLOW_TX_MS = 10
+
 
 def log(msg):
     print("[{:>6}] {}".format(time.ticks_ms() // 1000, msg))
@@ -116,7 +121,12 @@ class PendantLink:
         self.on_message = on_message
         self.connected = False
         self.stats = {"sent": 0, "received": 0, "dropped": 0, "sessions": 0,
-                      "unacked": 0}
+                      "unacked": 0,
+                      # How often a send blocked long enough to cost the
+                      # scheduler a tick, and the worst one seen. Only this
+                      # transport sets these, so the WiFi path's report is
+                      # unchanged.
+                      "slow_tx": 0, "worst_tx_ms": 0}
 
         self._link = None
         self._peer = None
@@ -199,10 +209,30 @@ class PendantLink:
         if len(payload) > MAX_PAYLOAD:
             self.stats["dropped"] += 1
             return True                 # not a link failure, so do not tear down
+        # Timed, because how long this call takes is the open question about
+        # this transport.
+        #
+        # ESPNow.send() is synchronous: it waits for the peer's radio to
+        # acknowledge, and a packet that is not acknowledged first goes through
+        # its retries. At the ~1% loss measured in the shop and fifty messages
+        # a second, that is roughly one lost packet every two seconds - which
+        # is the same order as the eleven loop stalls this transport reports
+        # against WiFi's one. Suggestive, and not yet evidence.
+        #
+        # This is deliberately a measurement rather than a fix. The obvious
+        # change - sync=False - was written once, bundled with two genuinely
+        # bad changes, reverted untested, and would have been the fourth guess
+        # in a row on this link.
+        started = time.ticks_ms()
         try:
             acked = bool(self._link.send(peer, payload))
         except OSError:
             return False
+        elapsed = time.ticks_diff(time.ticks_ms(), started)
+        if elapsed >= SLOW_TX_MS:
+            self.stats["slow_tx"] += 1
+        if elapsed > self.stats["worst_tx_ms"]:
+            self.stats["worst_tx_ms"] = elapsed
         # Only unicast to the current peer counts as evidence. A broadcast is
         # reported successful whether or not anything heard it, since there is
         # nobody specific to acknowledge it.

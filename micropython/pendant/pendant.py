@@ -762,10 +762,19 @@ async def report():
         capacity = scheduler.planner_capacity
         held = capacity - state["planner_free"] if capacity else 0
         deepest = capacity - state["planner_min"] if capacity else 0
+        # Only the ESP-NOW link reports these, so the WiFi one-liner keeps its
+        # existing shape. It answers one open question: that transport reports
+        # around eleven loop stalls a session where WiFi reports one, and a
+        # synchronous radio send waiting out its retries is the only candidate
+        # left after RF loss and the run-ahead bound were both ruled out.
+        tx = ""
+        if pendant_link.stats.get("worst_tx_ms"):
+            tx = " tx={}/{}ms".format(pendant_link.stats.get("slow_tx", 0),
+                                      pendant_link.stats["worst_tx_ms"])
         link.log(
             "{} | axis {} step {} F{:.0f}/act{} collapse={} | {} | detents={}"
             " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm depth={}/{} of {}"
-            " err={} sess={} stall={}/{}ms".format(
+            " err={} sess={} stall={}/{}ms{}".format(
                 "up" if pendant_link.connected else "DOWN",
                 scheduler.axis, scheduler.step, scheduler.feed,
                 state["actual_feed"], state["feed_collapses"], position,
@@ -774,7 +783,7 @@ async def report():
                 held, deepest, capacity,
                 encoder.errors,
                 pendant_link.stats["sessions"], state["stalls"],
-                state["worst_stall_ms"]))
+                state["worst_stall_ms"], tx))
 
 
 async def main():
