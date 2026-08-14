@@ -174,8 +174,28 @@ def ping(e):
     rtt_us = []
     unacked = 0        # never reached the other radio
     silent = 0         # acknowledged, but no reply came back
+    late = 0           # answered, but not before the next ping went out
 
     for i in range(SAMPLES):
+        # Drain anything still buffered before timing the next one.
+        #
+        # Without this a single late reply desynchronises the whole run: the
+        # next recv() returns the *previous* ping's answer, which fails the
+        # payload match, counts as silent, and leaves the stream permanently
+        # off by one. Every sample after that mismatches while packets are
+        # still flowing perfectly.
+        #
+        # It reads as sudden catastrophic loss and it is entirely an artefact.
+        # Measured at the machine as 108/200 received with 90 "acknowledged but
+        # never answered", against a responder that reported sending 200
+        # replies with 5 unacknowledged - roughly 1% real loss reported as 46%.
+        # That very nearly became a hardware conclusion.
+        while True:
+            _, stale = e.recv(0)
+            if stale is None:
+                break
+            late += 1
+
         payload = b"p" + bytes([i & 0xFF])
         started = time.ticks_us()
 
@@ -218,6 +238,11 @@ def ping(e):
     print("\n  received {}/{}".format(received, SAMPLES))
     print("  {} never acknowledged by the peer's radio".format(unacked))
     print("  {} acknowledged but never answered".format(silent))
+    # Reported separately because it is a different fault from loss and used
+    # to masquerade as it. A reply that arrives after the next ping has gone
+    # out is a tail-latency event, not a dropped packet, and the responder's
+    # own count is the check: if it says it sent them, they were not lost.
+    print("  {} answered after the next ping had gone out".format(late))
 
     print("\n  TCP for comparison:  {}".format(TCP_BASELINE))
     print("  Compare the tail. A median a few times better but the same p99")
