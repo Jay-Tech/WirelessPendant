@@ -399,7 +399,61 @@ fighting it.
   and says nothing about a shop with more steel in the path.
 - **Pairing.** ESP-NOW addresses by MAC. Needs a story for someone who owns two.
 - **Sender transport.** `PendantService` becomes a serial reader rather than a
-  TCP listener. The JSON-lines protocol can stay as it is.
+  TCP listener. The JSON-lines protocol can stay as it is. Half done: the
+  service now writes through an `IPendantChannel` rather than a `NetworkStream`,
+  so the serial implementation is an addition beside the TCP one rather than a
+  change to it. Both transports stay, one pendant active at a time, newest
+  wins - claimed by the accept on TCP and by the `hello` on serial, since the
+  receiver's port is open whether or not a pendant is switched on.
+- **Broadcast the jog messages.** The most promising untried idea on this link.
+
+  ESP-NOW unicast is acknowledged and retried at the 802.11 MAC layer, and that
+  is not optional - it is what makes a send take up to 104 ms and stall the
+  loop. Declining to *wait* for it, with `sync=False`, does not help: the
+  retries still happen, and the pendant simply gets ahead of the radio until
+  the driver queue overflows silently. That was measured and reverted.
+
+  Broadcast frames are neither acknowledged nor retried. That removes the cost
+  rather than hiding it, and this protocol is unusually well suited to losing
+  packets: `protocol.py` sends a detent count and a step size rather than a
+  target position, precisely "so a dropped message loses a little motion
+  instead of desynchronising a position the two ends would then disagree
+  about". At the ~1% loss measured here, a lost jog is 0.1-1 mm the operator
+  corrects with the wheel without noticing - which already happens whenever the
+  emission cap discards a detent.
+
+  Keep `hello` and `ping` unicast so discovery and pairing are unchanged. The
+  receiver already registers a broadcast peer, so it would hear them today.
+
+  What to watch: this removes the flow control the blocking send currently
+  provides, exactly as `sync=False` did. The difference is that it also removes
+  what that flow control existed to absorb, since with no retries the
+  per-packet cost is constant and small. That is the assumption to test rather
+  than to trust.
+- **Coarse-step block quantisation.** A hypothesis with arithmetic behind it and
+  no measurement yet.
+
+  The operator reports minor bumps at 1.0 mm that the stall counter never sees,
+  while 0.1 mm is smooth. The pendant can only send whole detents, and per tick
+  it wants to send what the commanded feed drains:
+
+      0.1 mm at F2500   ->  0.83 mm per 20 ms tick  ->  8.3 detents
+      1.0 mm at F10000  ->  3.33 mm per 20 ms tick  ->  3.3 detents
+
+  Rounding 8.3 is a 12% swing in block length. Rounding 3.3 is **33%**, and the
+  surplus is discarded rather than banked, so the depth regulator picks 3 or 4
+  tick by tick. `jog.py` already warns what unequal blocks feel like: "blocks of
+  unequal length take unequal time at a fixed feed, so a short one landing on a
+  shallow planner is a stumble".
+
+  Confirming it means seeing block lengths alternate 3, 3, 4, 3. The trace
+  tables used to show that and are off for machine work because printing blocks
+  the loop, so it needs a cheaper instrument - the spread of emitted detent
+  counts in the periodic one-liner would do.
+
+  If it holds, the options are carrying the fractional residual so the average
+  comes out right, or accepting that 1.0 mm at a 20 ms tick has inherently
+  coarse blocks.
 
 ## What carries over
 
