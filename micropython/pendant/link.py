@@ -132,7 +132,43 @@ class PendantLink:
     # --- outbound ---------------------------------------------------------
 
     def send(self, message):
-        """Queue a message. Drops the oldest if the queue is already full."""
+        """Queue a message, merging a jog into one already waiting.
+
+        A jog carries a signed detent count and a step size, and the distance it
+        means is exactly detents x step - so two jogs on the same axis with the
+        same step add together with no approximation at all. Merging them loses
+        nothing.
+
+        Dropping did lose something. The old behaviour discarded the oldest
+        message once the queue filled, detents and all, so movement the operator
+        had turned for simply never reached the machine: better than a third of
+        it on a fast jog, and the shortfall showed up as lag that never came
+        back. It also arrived at the sender as a gap in the stream, which empties
+        the controller's planner and stalls the axis - the drops and the stumble
+        were the same event seen from two ends.
+
+        This costs nothing when the link is keeping up, because a drained queue
+        has no tail to merge with and messages stay fine-grained. It only takes
+        effect once there is a backlog, which is exactly when the alternative was
+        throwing motion away.
+
+        Feed takes the larger of the two rather than the newer. It describes how
+        fast the wheel is turning over the merged span, and the sender treats it
+        as a ceiling it is free to lower - which it now does from its own
+        measurement.
+        """
+        if message.get("t") == protocol.T_JOG and self._queue:
+            tail = self._queue[-1]
+            if (tail.get("t") == protocol.T_JOG
+                    and tail.get("axis") == message.get("axis")
+                    and tail.get("step") == message.get("step")):
+                tail["det"] += message.get("det", 0)
+                feed = message.get("feed")
+                if feed is not None:
+                    tail["feed"] = max(tail.get("feed", 0), feed)
+                self.stats["merged"] = self.stats.get("merged", 0) + 1
+                return
+
         if len(self._queue) >= self._limit:
             self._queue.pop(0)
             self.stats["dropped"] += 1
