@@ -1,12 +1,12 @@
 # Pendant daughter board
 
 Breaks the ESP32-S3-Touch-LCD-3.5's 32-pin header out to the handwheel and the
-three panel buttons, and passes the battery through a reverse-polarity guard on
-its way to the host board.
+three panel buttons. That is the whole job, and it carries no parts at all - the
+3V3 encoder change removed the last two resistors.
 
-The breakout half carries no parts at all - the 3V3 encoder change removed the
-last two resistors. The guard adds a MOSFET and one resistor, which is the
-entire active BOM.
+A reverse-polarity guard for the battery is specified at the end of this
+document. It was first proposed as part of this board but shares no net with it,
+and belongs on its own small board at the host end - see that section.
 
 It exists because the host board brings almost everything out on that one
 header - the only other connectors are JST leads for the speaker, the RTC cell
@@ -155,9 +155,9 @@ and once the two boards are stacked almost nothing else is.
 
 - **Anything at 5 V.** There is no 5 V anywhere in this design. The AXP2101's
   outputs all step down, and the boost that used to be in the BOM is gone.
-- **The battery, unguarded.** It reaches the host board's own JST connector, but
-  through this board rather than past it - see the reverse-polarity guard below.
-  Nothing on this board draws from it.
+- **The battery.** It reaches the host board's own JST connector, and nothing on
+  this board draws from it or shares a net with it. The reverse-polarity guard
+  specified below belongs on its own board at the host end, not here.
 - **The power button.** It is on the host board and is now reached through the
   enclosure rather than wired to a header pin.
 
@@ -182,8 +182,32 @@ Once it is connected, `selftest_battery.py` confirms the chain non-destructively
 ## The reverse-polarity guard
 
 Two parts, and they turn "meter it every time" into "it does not matter". The
-cell comes into a JST on this board, through the guard, and out of a second JST
-to the host board's battery connector.
+cell comes into a JST, through the guard, and out of a second JST to the host
+board's battery connector.
+
+### It does not have to be on this board
+
+It is described here because that is where it was first proposed, but it shares
+no net with anything else on the daughter board - the battery never touches the
+32-pin header - so it is better off as its own small board, or as nothing more
+than a FET and a resistor inline in a heatshrunk pigtail.
+
+Two reasons, and the second is the stronger one:
+
+**It stops waiting on the hard part.** The daughter board's unknowns are the
+header and the button stack. The guard has neither, so keeping it separate means
+the host board can be protected before the daughter board exists, and a later
+change to the header or the caps does not touch it.
+
+**Put it at the host end, not the battery end.** Everything *upstream* of the
+guard is protected and everything downstream is not, so the segment between the
+guard and the host board is the exposed one. Mounted by the battery, the long
+extension is that exposed segment - which is the very cable this exists to
+defend against. Mounted at the host board's battery connector with a short
+pigtail into it, the extension, the battery connector and every future cell swap
+all fall upstream and are covered.
+
+The rest of this section applies wherever it ends up.
 
 ### The circuit
 
@@ -298,9 +322,10 @@ actually set to lives in registers `0x62` and `0x63`, which
 ### What it does not protect
 
 **Only what is upstream of it.** The input JST catching a mirrored extension is
-the case this solves. The **output lead**, from this board to the host's battery
-connector, is now the unprotected link - so make that one short, fixed, and
-metered once, rather than treating it as something to unplug routinely.
+the case this solves. The **output lead**, from the guard to the host's battery
+connector, is the unprotected link - which is the whole argument for mounting
+the guard at the host end, where that lead can be a short fixed pigtail metered
+once, rather than at the battery end, where it is the full extension run.
 
 **Not a short circuit.** Reverse polarity is the dead-board failure; a
 downstream short is the fire one. That is the cell's protection PCB's job - most
