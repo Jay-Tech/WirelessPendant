@@ -103,6 +103,36 @@ check("runaway line is dropped rather than buffered",
 check("decoder still works after an overflow",
       decode_all(d, p.encode(p.ping(5))), [{"t": "ping", "seq": 5}])
 
+print("\nbattery")
+
+# The optional fields are the part a sender can get wrong. It has to tell "no
+# answer" from "zero", and a message that carried pct=0 for a pendant with no
+# cell would put a flat battery on the one screen the operator watches during
+# a job.
+check("battery carries volts, percent and charging",
+      p.battery(4.02, 81, True),
+      {"t": "battery", "v": 4.02, "pct": 81, "chg": True})
+
+check("  volts are rounded rather than sent raw",
+      p.battery(4.0199999, 81, False)["v"], 4.02)
+
+check("  percent is an int even when handed a float",
+      p.battery(3.8, 55.7, False)["pct"], 55)
+
+no_reading = p.battery(None, None, False)
+check("  no cell sends neither volts nor percent",
+      ("v" in no_reading, "pct" in no_reading), (False, False))
+check("    but still sends the message, rather than going quiet",
+      no_reading, {"t": "battery", "chg": False})
+
+check("  charging is always present and always a bool",
+      (p.battery(None, None, 1)["chg"], p.battery(None, None, 0)["chg"]),
+      (True, False))
+
+check("battery survives encode/decode",
+      decode_all(p.LineDecoder(), p.encode(p.battery(3.71, 15, False))),
+      [{"t": "battery", "v": 3.71, "pct": 15, "chg": False}])
+
 print()
 if failures:
     print("{} FAILED: {}".format(len(failures), ", ".join(failures)))

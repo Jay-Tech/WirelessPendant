@@ -788,13 +788,24 @@ async def poll_battery():
     reading the PMIC a hundred times more often than there is any reason to, or
     a counter in a loop that is already the most timing-sensitive one here.
     """
-    if battery is None or screen is None:
+    # Only the monitor is required. A pendant with no panel still has a sender
+    # to tell, and guarding on the screen here once meant a headless board
+    # reported its charge to nobody.
+    if battery is None:
         return
 
     while True:
         try:
-            _, percent, charging = battery.get_status()
-            screen.set_battery(percent, charging)
+            volts, percent, charging = battery.get_status()
+            if screen is not None:
+                screen.set_battery(percent, charging)
+
+            # Sent every poll rather than only on change. It is one small
+            # message per ten seconds, and it means a sender that connects
+            # part way through a shift learns the charge within one interval
+            # instead of waiting for the level to move.
+            if pendant_link is not None and pendant_link.connected:
+                pendant_link.send(protocol.battery(volts, percent, charging))
         except Exception as exc:
             # One bad read must not end the task - it would stop the panel
             # updating for the rest of the session, and the reading it stopped
