@@ -229,9 +229,34 @@ def main():
     poller = select.poll()
     poller.register(sys.stdin, select.POLLIN)
 
+    # Nothing may leave this loop.
+    #
+    # Falling out of it does not stop at stopping: MicroPython's fallback is the
+    # REPL, and the REPL is on the same serial port the sender is writing to. So
+    # a single unhandled exception turns this board into a Python prompt being
+    # fed status frames ten times a second, which echoes each one back and fails
+    # on `false` - JSON spells it lower case and Python does not. The sender
+    # sees thousands of malformed lines, the pendant goes dead, and the board
+    # cannot recover without someone resetting it.
+    #
+    # It was seen exactly once, after minutes of working, with no clue left as
+    # to what raised - because whatever traceback it printed went down the wire
+    # and was swallowed as another malformed line. Hence reporting the fault as
+    # a note rather than letting it print, and carrying on: a receiver that
+    # drops one packet and continues is worth much more than one that is
+    # perfectly correct until it is not there at all.
+    faults = 0
     while True:
-        bridge.pump_radio()
-        bridge.pump_serial(poller)
+        try:
+            bridge.pump_radio()
+            bridge.pump_serial(poller)
+        except Exception as exc:            # noqa: BLE001 - deliberately total
+            faults += 1
+            try:
+                note("fault {}: {}: {}".format(
+                    faults, type(exc).__name__, exc))
+            except Exception:
+                pass                        # reporting must not be the thing that kills it
 
 
 raise SystemExit(main())
