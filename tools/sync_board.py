@@ -47,7 +47,8 @@ RECEIVER = ROOT / "micropython" / "receiver" / "receiver.py"
 # import - which reads like a packaging problem rather than a missing file.
 MODULES = ["quadrature.py", "quadrature_pcnt.py", "protocol.py", "link.py",
            "espnow_link.py", "jog.py", "buttons.py", "ili9341.py",
-           "st7796.py", "tca9554.py", "screen.py", "touch.py"]
+           "st7796.py", "tca9554.py", "screen.py", "touch.py",
+           "axp2101.py", "battery_monitor.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
 DEFAULT_DEVICE = board.device()

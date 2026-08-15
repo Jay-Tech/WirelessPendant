@@ -43,7 +43,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
 from pendant.screen import (DroScreen, AXES, STATUS_PITCH,  # noqa: E402
                             ROW_PITCH, STEP_ROWS, PAGE_ZONE_X,
-                            PROBE_OPS, PROBE_ROW_H, PROBE_TOP)
+                            PROBE_OPS, PROBE_ROW_H, PROBE_TOP,
+                            LINK_CELLS, BATTERY_CELLS,
+                            BATTERY_WARN_PERCENT, BATTERY_CRITICAL_PERCENT)
 from pendant.jog import STEP_SIZES  # noqa: E402
 from pendant.screen import Zones  # noqa: E402
 
@@ -280,7 +282,8 @@ for axis in AXES:
 # raising, so it would have shown as a truncated word.
 for _name, _field in (("state", tall_screen._state),
                       ("link", tall_screen._link),
-                      ("feed", tall_screen._mode)):
+                      ("feed", tall_screen._mode),
+                      ("battery", tall_screen._battery)):
     check("  the {} field clears the corner".format(_name),
           _field.x + _field.length * _field.glyphs.width <= PAGE_ZONE_X, True)
 
@@ -495,6 +498,72 @@ check("  while beside it the one beneath still does", stacked.hit(10, 50),
 
 stacked.clear()
 check("clearing removes every zone", stacked.hit(100, 50), None)
+
+print("\nbattery on the link row")
+
+# This line has no slack anywhere. The link text was cut from nine cells to
+# seven to make room, seven is exactly "NO LINK", and what is left over is
+# exactly four small cells, which is exactly "100%". Three exact fits means
+# every one of them is a regression waiting to happen, and none of them fails
+# loudly: the driver clips at the panel edge, so a field grown by one character
+# shows as a smeared line rather than as an error.
+check("the longest link text fits its field",
+      len("NO LINK") <= LINK_CELLS, True)
+check("  and so does the shorter one", len("link up") <= LINK_CELLS, True)
+check("  the fullest battery reading fits too",
+      len("100%") <= BATTERY_CELLS, True)
+
+_link_right = (tall_screen._link.x
+               + tall_screen._link.length * tall_screen._link.glyphs.width)
+check("  the link text stops before the battery starts",
+      _link_right <= tall_screen._battery.x, True)
+check("  and the battery stops before the corner",
+      tall_screen._battery.x
+      + tall_screen._battery.length * tall_screen._battery.glyphs.width
+      <= PAGE_ZONE_X, True)
+
+# Right-aligned for the same reason the feed is: a percentage losing a digit
+# at 99 would otherwise shuffle the text sideways.
+check("  the battery reading is right-aligned",
+      tall_screen._battery.align, "right")
+
+# Both status lines share a row, so they must share a baseline band too - a
+# battery field placed at the link's y with a smaller glyph sits high in the
+# row unless it is centred against it.
+check("  it sits on the link row", tall_screen._battery.y >= tall_screen._link.y,
+      True)
+check("    and inside it",
+      tall_screen._battery.y + tall_screen._battery.glyphs.height
+      <= tall_screen._link.y + tall_screen._link.glyphs.height, True)
+
+# Nothing to say must look like nothing to say. A missing cell, a board with no
+# PMIC and an untrustworthy reading all arrive here as None, and all three have
+# to avoid putting a confident number on the panel - showing 0% would read as
+# flat rather than as unknown, which is the more alarming of the two wrong
+# answers.
+tall_screen.set_battery(None)
+check("  no reading shows as a gap, not a zero",
+      tall_screen._battery._shown.strip(), "--")
+
+# Colour is the only warning this line can carry - there is no room beside four
+# digits for a word - so the thresholds are worth pinning.
+_GREY, _RED, _GREEN, _AMBER = (
+    getattr(_ili9341, _n) for _n in ("GREY", "RED", "GREEN", "AMBER"))
+
+tall_screen.set_battery(80)
+check("  a healthy cell is unremarkable", tall_screen._battery.color, _GREY)
+tall_screen.set_battery(BATTERY_WARN_PERCENT)
+check("    at the warning threshold it turns amber",
+      tall_screen._battery.color, _AMBER)
+tall_screen.set_battery(BATTERY_CRITICAL_PERCENT)
+check("    and red at the critical one", tall_screen._battery.color, _RED)
+
+# A pendant on charge is not a problem, at any level. Warning about a battery
+# that is actively filling is the kind of alarm an operator learns to ignore,
+# and that habit costs the one that matters.
+tall_screen.set_battery(5, charging=True)
+check("  charging is never a warning, even at 5%",
+      tall_screen._battery.color, _GREEN)
 
 print("\nredraw")
 

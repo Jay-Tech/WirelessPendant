@@ -229,6 +229,27 @@ DISPLAY_REFRESH_MS = 100
 DISPLAY_REFRESH_TRAVERSE_MS = 500
 DISPLAY_TRAVERSE_FEED = 2000.0
 
+# Dim the backlight after this long with no operator input. Zero disables it.
+#
+# The backlight is the biggest load on the device, so this is most of what the
+# pendant can do about its own battery. Two minutes rather than thirty seconds
+# because the cost of getting it wrong is asymmetric: dimming too late wastes a
+# little charge, dimming while someone is mid-setup makes the tool feel like it
+# is going to sleep on them.
+DISPLAY_IDLE_DIM_S = 120
+
+# What "dim" means. Not off - a dim DRO is still readable from the machine, and
+# the whole reason to look at a pendant is to answer a question without walking
+# to the screen. Blanking it would mean waking it first, every time.
+DISPLAY_DIM_LEVEL = 0.15
+
+# Only operator input counts as use: the wheel, the touch panel and the
+# buttons. Deliberately not the machine running - a job can run for an hour
+# with nobody touching the pendant, which is exactly when the backlight is
+# worth turning down. It dims rather than blanks precisely so that case stays
+# glanceable.
+DISPLAY_IDLE_POLL_MS = 500
+
 # A reported feed below this share of the commanded one, while the commanded
 # feed is meaningful, counts as the machine failing to hold what it was asked
 # for rather than simply moving slowly.
@@ -245,11 +266,29 @@ COLLAPSE_DUMP_QUIET_MS = 10000
 
 STATUS_REPORT_S = 15
 
+# How often the cell is read. Slow on purpose: this is an I2C transaction on
+# the bus the touch panel is polled on at 30 ms, and a battery is the one thing
+# on this device that cannot change materially between one second and the next.
+# Ten seconds is still forty readings across the shift it takes to flatten it.
+BATTERY_POLL_MS = 10000
+
 encoder = None
 scheduler = None
 pendant_link = None
 screen = None
 touch = None
+battery = None
+
+# When the operator last did something. Stamped rather than counted, so the
+# several places that constitute "use" do not each need their own counter and
+# the dim task compares one number.
+_last_activity_ms = 0
+
+
+def note_activity():
+    """Record that the operator touched something. Cheap enough to call freely."""
+    global _last_activity_ms
+    _last_activity_ms = time.ticks_ms()
 
 state = {"dro": None, "machine_state": "?", "status_frames": 0,
          "lag_mm": 0.0, "peak_lag_mm": 0.0, "_ref": None,
@@ -439,6 +478,7 @@ def update_lag(wpos):
 
 def handle_button(action, event):
     """Map one button event onto pendant state or a message to the sender."""
+    note_activity()
     # Axis and step live entirely on the pendant: they change what future jog
     # messages say, and the sender has no opinion about them.
     if action == "zero_axis":
@@ -578,6 +618,8 @@ def handle_touch(kind, target, value):
     zero button. One convention for "this one is consequential", rather than a
     different gesture depending on which surface the control lives on.
     """
+    note_activity()
+
     if kind == "tap":
         if target == "axis" and value != scheduler.axis:
             # Changing axis mid-motion has to flush what is queued, or the old
@@ -698,6 +740,125 @@ async def refresh_display():
             scheduler.feed >= DISPLAY_TRAVERSE_FEED
         await asyncio.sleep_ms(DISPLAY_REFRESH_TRAVERSE_MS if traversing
                                else DISPLAY_REFRESH_MS)
+
+
+def start_battery():
+    """Bring up the PMIC, or return None and carry on without it.
+
+    Same shape as start_touch and start_display, and for the same reason: a
+    board with no cell fitted, or one whose PMIC does not answer, is a pendant
+    that still jogs the machine. The panel shows "--" and nothing else changes.
+    """
+    try:
+        from battery_monitor import BatteryMonitor
+    except ImportError:
+        try:
+            from pendant.battery_monitor import BatteryMonitor
+        except ImportError as exc:
+            link.log("battery module missing ({}) - no charge shown".format(exc))
+            return None
+
+    monitor = BatteryMonitor(scl_pin=PIN_TOUCH_SCL, sda_pin=PIN_TOUCH_SDA,
+                             i2c_bus=TOUCH_I2C_ID)
+    if not monitor.present:
+        link.log("no PMIC on I2C{} - no charge shown".format(TOUCH_I2C_ID))
+        return monitor
+
+    volts, percent, charging = monitor.get_status()
+    if volts is None:
+        link.log("battery: PMIC present, no cell fitted")
+    else:
+        # The gauge is logged beside the curve deliberately. It was measured
+        # wrong on this board, and one line per boot is what will show whether
+        # that holds - on this board over time, and on anyone else's.
+        link.log("battery {:.2f} V, {} by curve, {} by gauge{}".format(
+            volts,
+            "{}%".format(percent) if percent is not None else "below curve",
+            "{}%".format(monitor.gauge_percent())
+            if monitor.gauge_percent() is not None else "no answer",
+            ", charging" if charging else ""))
+    return monitor
+
+
+async def poll_battery():
+    """Read the cell every few seconds and put it on the panel.
+
+    Its own task rather than a line in refresh_display, because that loop runs
+    at 100 ms and this wants ten seconds - folding it in would mean either
+    reading the PMIC a hundred times more often than there is any reason to, or
+    a counter in a loop that is already the most timing-sensitive one here.
+    """
+    if battery is None or screen is None:
+        return
+
+    while True:
+        try:
+            _, percent, charging = battery.get_status()
+            screen.set_battery(percent, charging)
+        except Exception as exc:
+            # One bad read must not end the task - it would stop the panel
+            # updating for the rest of the session, and the reading it stopped
+            # showing is the one that matters at the end of a shift.
+            link.log("battery read failed: {}: {}".format(
+                type(exc).__name__, exc))
+        await asyncio.sleep_ms(BATTERY_POLL_MS)
+
+
+async def dim_display():
+    """Turn the backlight down when the pendant has been left alone.
+
+    The wheel is watched through the scheduler's own detent counter rather than
+    by hooking the encoder, because that counter already exists and is already
+    incremented on exactly the events that mean "a hand is on the wheel". The
+    touch panel and the buttons stamp `note_activity` directly, since neither
+    keeps a count of its own.
+
+    Waking is deliberately not a gesture. Any input at all restores full
+    brightness, including the one that was going to do something anyway - a
+    pendant that makes you tap it once to wake it and again to act is a pendant
+    that gets tapped twice for the rest of its life.
+    """
+    if screen is None or not DISPLAY_IDLE_DIM_S:
+        return
+
+    note_activity()
+    last_detents = None
+    dimmed = False
+
+    while True:
+        # Reading through stats rather than the encoder keeps this out of the
+        # decoder's way: the counter is plain integer state the jog path
+        # updates anyway, so watching it costs nothing it was not already
+        # paying.
+        detents = scheduler.stats["detents"] if scheduler is not None else 0
+        if detents != last_detents:
+            if last_detents is not None:
+                note_activity()
+            last_detents = detents
+
+        idle_ms = time.ticks_diff(time.ticks_ms(), _last_activity_ms)
+        want_dim = idle_ms >= DISPLAY_IDLE_DIM_S * 1000
+
+        if want_dim != dimmed:
+            dimmed = want_dim
+            try:
+                screen.display.set_brightness(
+                    DISPLAY_DIM_LEVEL if dimmed else 1.0)
+                # One line per transition, which is rare by construction. The
+                # feature is otherwise invisible in a log, and "did it ever
+                # dim" is the first question anyone asks of it.
+                link.log("display {}".format(
+                    "dimmed to {:.0f}% after {} s idle".format(
+                        DISPLAY_DIM_LEVEL * 100, DISPLAY_IDLE_DIM_S)
+                    if dimmed else "woken"))
+            except Exception as exc:
+                # A driver without brightness control is not a reason to stop
+                # the pendant, or to keep retrying every half second.
+                link.log("backlight control unavailable ({}: {})".format(
+                    type(exc).__name__, exc))
+                return
+
+        await asyncio.sleep_ms(DISPLAY_IDLE_POLL_MS)
 
 
 async def publish_mode():
@@ -837,13 +998,14 @@ async def report():
 
 
 async def main():
-    global encoder, scheduler, pendant_link, screen, touch
+    global encoder, scheduler, pendant_link, screen, touch, battery
 
     print("\ngrblHAL wireless pendant")
     print("=" * 46)
 
     screen = start_display()
     touch = start_touch()
+    battery = start_battery()
     encoder = Quadrature(ENCODER_PIN_A, ENCODER_PIN_B)
     link.log("handwheel on GP{}/GP{}".format(ENCODER_PIN_A, ENCODER_PIN_B))
 
@@ -890,6 +1052,8 @@ async def main():
         poll_buttons(),
         publish_mode(),
         refresh_display(),
+        poll_battery(),
+        dim_display(),
         watch_touch(),
         watchdog(),
         status_led(),

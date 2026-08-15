@@ -141,12 +141,39 @@ TALL_PANEL = 400
 PAGE_ZONE_X = 240
 
 # Cells for the status fields, sized to what they actually hold. "Alarm" and
-# "Check" are the longest states, "LINK DOWN" the longest link text, "F15000"
+# "Check" are the longest states, "NO LINK" the longest link text, "F15000"
 # the longest feed. State and feed share a row and must not meet, and neither
 # may reach the corner.
 STATE_CELLS = 5
-LINK_CELLS = 9
+LINK_CELLS = 7
 FEED_CELLS = 6
+
+# Battery shares the link row, right-aligned against the corner, the same way
+# feed shares the state row.
+#
+# The link text was cut from nine cells to seven to make the room - "LINK DOWN"
+# became "NO LINK" - and seven is what "NO LINK" needs exactly. At 24 px that
+# ends the link at 176, leaving 176-240: 64 px, which is exactly four cells of
+# the smaller glyph, which is exactly "100%".
+#
+# Three exact fits in a row is worth saying out loud, because it means there is
+# no slack anywhere on this line. Anything longer than "100%", or a link string
+# longer than "NO LINK", collides rather than truncating politely - the driver
+# clamps at the panel edge and the corner border is drawn over, so it would
+# show as a smeared line rather than as an error.
+BATTERY_CELLS = 4
+
+# Where the battery figure changes colour. Percentages rather than volts,
+# because a percentage is all this module is given - the conversion belongs
+# with whatever reads the cell, and a layout that knew about lithium chemistry
+# would be a layout that has to change when the cell does.
+#
+# 20 and 10 rather than the 3.4 V and 3.2 V in hardware/carrier-board.md.
+# Those are the cell's limits and sit at roughly 2% and 0% on a LiPo curve, so
+# warning there is warning as it dies. These are warnings with enough left to
+# finish what is on the machine and go and find the charger.
+BATTERY_WARN_PERCENT = 20
+BATTERY_CRITICAL_PERCENT = 10
 
 # Pitch between the two status lines when the band is tall enough for the
 # larger glyph. The smaller STATUS_PITCH would overlap 24 px text.
@@ -240,7 +267,7 @@ class DroScreen:
         # ignore them and still show them the moment it comes back, rather
         # than reading zero until the next status frame.
         self._latest = {"position": None, "state": None, "link": None,
-                        "mode": None}
+                        "mode": None, "battery": None}
         self._axis = None
         self._axis_boxes = {}
         self.build()
@@ -408,6 +435,16 @@ class DroScreen:
         self._link = Field(self.display, status, 8, link_y, LINK_CELLS,
                            color=AMBER, align="left")
 
+        # Battery shares the link row the way feed shares the state row: right
+        # aligned against the corner, at the smaller glyph even when the status
+        # text is larger, because the space left over is exactly four small
+        # cells and no larger arrangement fits beside "NO LINK".
+        battery_w = BATTERY_CELLS * self._small.width
+        self._battery = Field(self.display, self._small,
+                              PAGE_ZONE_X - battery_w,
+                              link_y + (status.height - self._small.height) // 2,
+                              BATTERY_CELLS, color=GREY)
+
         # Feed shares the state row, right of the state text and left of the
         # corner, right-aligned so the digits do not shuffle as it changes.
         #
@@ -451,6 +488,8 @@ class DroScreen:
         mode = latest["mode"] or ("?", 0.0, 0.0)
         self.set_mode(mode[0], mode[1], mode[2])
         self.set_link(bool(latest["link"]))
+        battery = latest["battery"] or (None, False)
+        self.set_battery(battery[0], battery[1])
 
     def _build_probe_page(self):
         """The probe menu: one full-width target per operation, plus a way back.
@@ -696,8 +735,45 @@ class DroScreen:
         self._latest["link"] = connected
         if self.page != 0:
             return
-        self._link.set("link up" if connected else "LINK DOWN",
+        # "NO LINK" rather than "LINK DOWN", which is two cells shorter and is
+        # what makes room for the battery beside it. Both are seven characters
+        # or fewer, so the field never truncates.
+        self._link.set("link up" if connected else "NO LINK",
                        GREEN if connected else RED)
+
+    def set_battery(self, percent, charging=False):
+        """Charge as a percentage, or "--" when there is nothing to say.
+
+        `percent` is None with no cell fitted, with no PMIC on the board, and
+        while a reading cannot be trusted - all three show as "--" rather than
+        as a number, because the one thing this must never do is put a
+        confident figure on the panel that is not true. The AXP2101's own fuel
+        gauge does exactly that on this board: see axp2101.py.
+
+        Colour carries the warning, since there is no room beside four digits
+        for a word. That matches the rest of this line - the link says its
+        state in green or red on the same row.
+        """
+        self._latest["battery"] = (percent, charging)
+        if self.page != 0:
+            return
+
+        if percent is None:
+            self._battery.set("--", GREY)
+            return
+
+        if charging:
+            # Green whatever the level: a pendant on charge is not a problem
+            # to be warned about, even at 5%.
+            color = GREEN
+        elif percent <= BATTERY_CRITICAL_PERCENT:
+            color = RED
+        elif percent <= BATTERY_WARN_PERCENT:
+            color = AMBER
+        else:
+            color = GREY
+
+        self._battery.set("{:d}%".format(percent), color)
 
     def splash(self, message):
         self.display.fill(BLACK)
