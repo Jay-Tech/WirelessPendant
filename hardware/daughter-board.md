@@ -1,8 +1,12 @@
 # Pendant daughter board
 
 Breaks the ESP32-S3-Touch-LCD-3.5's 32-pin header out to the handwheel and the
-three panel buttons. That is the whole job. The board carries no active parts
-and, as of the 3V3 encoder change, no passives either.
+three panel buttons, and passes the battery through a reverse-polarity guard on
+its way to the host board.
+
+The breakout half carries no parts at all - the 3V3 encoder change removed the
+last two resistors. The guard adds a MOSFET and one resistor, which is the
+entire active BOM.
 
 It exists because the host board brings almost everything out on that one
 header - the only other connectors are JST leads for the speaker, the RTC cell
@@ -151,8 +155,9 @@ and once the two boards are stacked almost nothing else is.
 
 - **Anything at 5 V.** There is no 5 V anywhere in this design. The AXP2101's
   outputs all step down, and the boost that used to be in the BOM is gone.
-- **The battery.** It goes to the host board's own JST connector. See the note
-  on the extension lead below.
+- **The battery, unguarded.** It reaches the host board's own JST connector, but
+  through this board rather than past it - see the reverse-polarity guard below.
+  Nothing on this board draws from it.
 - **The power button.** It is on the host board and is now reached through the
   enclosure rather than wired to a header pin.
 
@@ -173,6 +178,134 @@ and possibly a vented cell.
 
 Once it is connected, `selftest_battery.py` confirms the chain non-destructively
 - but only after it is plugged in, so the meter comes first.
+
+## The reverse-polarity guard
+
+Two parts, and they turn "meter it every time" into "it does not matter". The
+cell comes into a JST on this board, through the guard, and out of a second JST
+to the host board's battery connector.
+
+### The circuit
+
+```
+   cell +  ──┬── [D]  P-FET  [S] ──┬──  to host BAT+
+             │         │           │
+    JST in   │        [G]          │   JST out
+             │         │           │
+   cell −  ──┼─────────┴── 100k ───┼──  to host BAT−
+             │                     │
+            GND ══════════════════ GND
+```
+
+| FET pin | Connects to |
+|---|---|
+| **D** (drain) | cell positive, from the input JST |
+| **S** (source) | output positive, to the host board |
+| **G** (gate) | ground, through 100 kOhm |
+
+**Drain to the cell, source to the host.** Wired the other way round it looks
+identical and protects nothing - see the reasoning below. This is the single
+detail to get right, and it is worth checking against the part's own datasheet
+pinout rather than a generic symbol, because SOT-23 pin numbering is not
+consistent between manufacturers.
+
+Ground is common throughout - the guard is in the positive line only.
+
+### What to buy
+
+A **P-channel MOSFET, logic level**, judged on one number: it must be fully on
+at **Vgs = -3.0 V**. Not -4.5 V, not -10 V, which is how most of them are
+specified.
+
+That number is not arbitrary. The gate sits at ground, so the FET is only ever
+turned on as hard as the cell voltage, and at the end of a discharge that is
+3.0 V. A part specified at -4.5 V will be part-way on down there - warm, and
+dropping voltage - exactly when the battery is already low.
+
+| Requirement | Why |
+|---|---|
+| P-channel, logic level | on at Vgs = -3.0 V |
+| Rds(on) low, ideally under 50 mOhm at -2.5 V | see the note on the battery readout |
+| Vds at least 20 V | trivially met; a 1S cell never exceeds 4.2 V |
+| SOT-23 or similar | it dissipates almost nothing |
+
+`AO3401A` and `DMG3415U` are both in the right class and both common. No Zener
+across the gate is needed: 4.2 V is nowhere near a typical +/-20 V Vgs rating.
+
+The 100 kOhm gate resistor is not critical - anything from 10 k to 1 M works. It
+exists to give the gate a defined potential, not to set a speed.
+
+### Prove it before it meets the host board
+
+Do this with the guard board alone, **nothing connected to the output JST**
+except a meter. This is the whole point of building it, and it takes a minute.
+
+1. **Correct polarity in.** Output should read the cell voltage, within a few
+   tens of millivolts. A drop of several hundred millivolts means the FET is not
+   turning on - wrong part, or the gate resistor is not reaching ground.
+2. **Reversed in.** Output should read **0 V**, and must not read negative.
+   Brief - a second is enough to see it.
+3. **Correct polarity again**, and confirm it comes back. A guard that only
+   works once has failed the reversal rather than survived it.
+
+Only after all three does the output JST get connected to the host board.
+
+If you have a current-limited bench supply, use that for step 2 rather than the
+cell. If you only have the cell, keep it short.
+
+### Why a diode will not do, and why this orientation
+
+Here for when the schematic is in front of you. Skip it if the circuit above is
+already wired.
+
+**The battery line runs both ways.** The AXP2101 charges the cell through the
+same two pins it discharges it through. A series diode blocks charging outright,
+and its 0.3-0.7 V drop would be ruinous on a cell whose whole useful span is
+3.0 to 4.2 V. A MOSFET channel, once turned on, conducts in both directions,
+which is what makes it the right part here.
+
+**Normal polarity.** The body diode inside the FET points from drain to source,
+so it conducts cell to host on its own. The output rises, which puts the source
+at about 3.7 V while the gate is at 0 V, so Vgs is about -3.7 V and the FET
+turns hard on - shorting out its own body diode and removing the diode drop.
+
+**Reversed.** The input now sits 3.7 V *below* ground. The gate and source are
+both near 0 V, so Vgs is 0 and the channel is off; and the body diode is now
+reverse biased, so it blocks too. Nothing conducts.
+
+**Wired the other way round** - source to the cell, drain to the host - the
+channel still turns off on reversal, but the body diode ends up forward biased
+and passes the reversed voltage straight through. The board looks identical and
+protects nothing, which is why the orientation is worth checking twice.
+
+### It changes what the battery gauge reads
+
+The AXP2101 measures the battery at *its* pin, which is now on the far side of
+the FET. So the voltage it reports is the cell plus or minus `I x Rds(on)`,
+depending on whether it is charging or discharging - and the pendant's charge
+percentage is derived from that voltage, so the error lands on the number the
+operator reads.
+
+| Rds(on) | Current | Error | On the curve |
+|---|---|---|---|
+| 50 mOhm | 0.5 A | 25 mV | lost in the noise |
+| 50 mOhm | 2 A | 100 mV | ~10 points on the flat middle |
+
+Keep Rds(on) low and it does not matter. The charge current the AXP2101 is
+actually set to lives in registers `0x62` and `0x63`, which
+`probe_axp2101_map.py` already dumps.
+
+### What it does not protect
+
+**Only what is upstream of it.** The input JST catching a mirrored extension is
+the case this solves. The **output lead**, from this board to the host's battery
+connector, is now the unprotected link - so make that one short, fixed, and
+metered once, rather than treating it as something to unplug routinely.
+
+**Not a short circuit.** Reverse polarity is the dead-board failure; a
+downstream short is the fire one. That is the cell's protection PCB's job - most
+1S packs have one at the terminals. **Confirm yours does.** If it is a bare
+cell, a fuse in this line is worth more than the FET.
 
 ## Mechanical constraints this board is under
 
