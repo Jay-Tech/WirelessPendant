@@ -316,9 +316,30 @@ input-high threshold (~2.15 V) without passing its absolute maximum of
 | 20k | 2.95 V | works |
 | **22k** | **3.06 V** | best centred, tolerant of pull-up variation |
 
-Powering the encoder at 3V3 instead, to skip the resistor entirely, is not
-worth it: the part is specified at 5 V and an under-driven encoder that works
-intermittently is the worst outcome available.
+> **Superseded on the ESP32-S3 build, 2026-08-15.** The encoder now runs from
+> the regulated 3V3 with **no resistors at all** - simpler, and a better logic
+> level than the divider above. The paragraph that used to sit here said
+> powering it at 3V3 "is not worth it: the part is specified at 5 V and an
+> under-driven encoder that works intermittently is the worst outcome
+> available." That was wrong, and is left visible because it failed in an
+> instructive way.
+>
+> It conflated the supply with the interface. The wheel is **open-collector**,
+> so its output level is its own supply: at 3V3 the pin sees a clean 3.3 V,
+> where the divider above delivers **3.06 V**. The arrangement being defended
+> was the more under-driven of the two. The only real question was whether the
+> wheel's internals run at 3.3 V, and they do - 16,695 counts at up to 195
+> detents/s with nothing dropped.
+>
+> Two things still matter. **Remove the resistors when you move to 3V3, not
+> after**: kept, they divide against the internal pull-up and give ~2.06 V,
+> under the input-high threshold on both parts. And **do not take Vcc from the
+> battery rail** - the level follows the supply, so it passes the S3's ~3.6 V
+> absolute maximum on a charged cell and sags as it drains.
+>
+> See [hardware/platform-decision.md](hardware/platform-decision.md). The
+> divider material above stays for the Pico 2 W build and for characterising an
+> unknown wheel.
 
 A- and B- stay unused. They exist for noise immunity over a long cable; if
 `errors` climbs because the lead runs near a VFD or steppers, feed A/A- and
@@ -343,6 +364,59 @@ Defaults are GP2 = A, GP3 = B.
 measure A against 0V while turning slowly. It should swing hard between ~0 V
 and ~5 V. If it never reaches 5 V unaided it is open-collector, not a line
 driver, and wants pull-ups instead of dividers.
+
+### Battery and backlight
+
+Both are ESP32-S3 only - they depend on the AXP2101 the board carries.
+
+**Charge is read from the cell voltage, not from the PMIC's fuel gauge.** The
+gauge on this board is wrong: at a steady 4.01 V on charge it reported 81%,
+then decayed 82% to 59% over thirty seconds, then read 31%. A cell at 4.0 V is
+genuinely 75-85%. It reads 0 correctly with no cell, so it is not dead - it is
+worse than dead, because every individual reading looks plausible and nothing
+about the number says it is wrong.
+
+[`battery_monitor.py`](micropython/pendant/battery_monitor.py) interpolates a
+LiPo curve instead. A curve is the cruder instrument and its limits are worth
+knowing: it reads high while charging, dips during radio bursts as the cell
+sags under load, and is nearly flat between 3.7 and 3.9 V where a few millivolts
+move it ten points. It is honest at the ends, which is where a warning has to
+be right. The gauge is still logged beside it at boot, so a board where they
+agree will say so.
+
+The panel shows it on the link row: grey above 20%, amber to 10%, red below,
+and green whenever charging at any level. `--` rather than `0%` when there is
+nothing trustworthy to say - no cell, no PMIC, or a reading outside the curve -
+because a confident zero reads as flat rather than as unknown.
+
+**The backlight dims to 15% after two minutes idle**, which is most of what the
+pendant can do about its own battery: the backlight draws 100-150 mA against
+50-120 mA for the CPU and radio together. Dim rather than off, because a dim DRO
+can still be read from the machine and a blank one has to be woken before it can
+answer the glance that prompted it. Only operator input counts as use - wheel,
+touch, buttons - deliberately not machine motion, since a job can run for an
+hour with nobody touching the pendant and that is exactly when it is worth
+turning down.
+
+```bash
+python tools/on_board.py micropython/pendant/selftest_battery.py    # cell to panel
+python tools/on_board.py micropython/pendant/selftest_backlight.py  # PWM or on/off
+python tools/on_board.py micropython/pendant/probe_axp2101.py       # does a reading hold still
+python tools/on_board.py micropython/pendant/probe_axp2101_map.py   # dump, for diffing
+python tools/test_battery.py                                        # the curve, no board
+```
+
+`selftest_backlight.py` earns its place: the driver falls back to on/off where a
+port has no PWM, and that fallback silently turns "dim after two minutes" into
+"blank after two minutes". It says which one you actually got.
+
+**Probes here take no input mid-run.** Driven through `mpremote`, output does
+not reach you until the run has finished, so a prompt printed during one is read
+after it is over. Anything needing hardware moved compares two separate runs
+instead - dump, change the thing, dump again, diff. `probe_axp2101_map.py` is
+built that way; three earlier attempts at a timed window were lost before that
+was understood, and each reported "nothing moved", which is exactly what a real
+negative result looks like.
 
 ### Network link
 
