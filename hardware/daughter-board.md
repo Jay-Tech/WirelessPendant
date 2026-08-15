@@ -346,6 +346,64 @@ thickness and switch height are one dimension chain, not three independent
 choices. Fix the host board and the enclosure top first; this board's stack
 height is then whatever is left, and the caps absorb the remainder.
 
+## Geometry
+
+**54.50 x 100.00 mm**, with 2 mm chamfers on all four corners. Carried by
+`Outline.dxf` and `Holes.dxf` in one shared frame, both exported together.
+
+**The origin is the header's centre in Y and the board's centre in X.** Mixed
+on purpose rather than by accident: the header is the datum everything mates
+to, and the board is symmetric about its own centreline. So Y = 0 sits on the
+header, 39 mm up from the bottom edge, and X = 0 is the board's midline.
+
+| Feature | Position |
+|---|---|
+| outline | X -27.250 to 27.250, Y -39.000 to 61.000, 2 mm corner chamfers |
+| header, 2x16 | columns X **-24.260** and **-21.720**, rows Y **-19.039** to **19.061** at 2.540 |
+| header body | X -25.590 to -20.390, Y -20.589 to 20.611 (5.20 x 41.20) |
+| **pin 1** | **(-24.260, 19.061)**, in a 1.6 mm crossed box |
+| encoder header, 1x6 | Y **58.000**, X **4.000** to **16.700** at 2.540 |
+| buttons | Y **53.000**, X **-15.250**, **0**, **15.250** |
+| mounting | X **+/-24.250**, Y **58.000 / 36.000 / -36.000** |
+
+Everything is inset **3.000 mm** from the edge it is nearest - the mounting
+holes from all four sides, the encoder header from the top. The exception is the
+header body, which clears the left edge by **1.660 mm**, and is the tightest
+thing on the board.
+
+**Two drill groups, and that is the acceptance test:**
+
+| Diameter | Count | |
+|---|---|---|
+| 1.0 mm | 38 | 32 header + 6 encoder |
+| 2.3 mm | 6 | mounting |
+
+A third group appearing in a future export means construction geometry has
+leaked in, which is what happened the first two times - mirrored circles off the
+screen standoff, and a leftover 0.8 mm reference at pin 1. The same trick
+`carrier-board.md` used with its four drill sizes: keep the expected set small
+enough that anything outside it is visible at a glance rather than needing to be
+checked.
+
+**The buttons are centre points, not holes**, which is correct - the switch
+footprint brings its own pads and drills, and the template only says where to
+put it. It also means the switch does not have to be chosen before this file is
+useful.
+
+**Pin 1 is a centre point, a box, and both diagonals.** A plain square reads as
+incidental geometry; a crossed box reads as deliberate, and nothing else on the
+board looks like it. Worth the four extra lines on the connector whose
+misorientation is the expensive mistake.
+
+### Still to resolve
+
+- **The encoder header may foul the right-hand button.** A 2.54 mm connector
+  body centred on Y 58 spans roughly Y 56.7 to 59.3; a 6 mm switch at Y 53 spans
+  50 to 56. About **0.7 mm** between them, with the X 15.250 button directly
+  under the connector's end. Needs the real parts, not nominal dimensions.
+- **The pin 1 label** is spline text 0.89 x 0.60 mm. Fine on a reference layer;
+  below most fabs' minimum silkscreen text height if it ever becomes silkscreen.
+
 ## Getting geometry out of CAD and into KiCad
 
 Two DXFs, same names and same rules as the carrier board, because the
