@@ -245,7 +245,22 @@ def main():
     # a note rather than letting it print, and carrying on: a receiver that
     # drops one packet and continues is worth much more than one that is
     # perfectly correct until it is not there at all.
+    # One fault seen so far, after minutes of normal work:
+    #
+    #   File "main.py", line 125, in pump_radio
+    #   File "espnow.py", line 20, in recv
+    #   ValueError: ESPNow.recv(): buffer error
+    #
+    # Raised inside MicroPython's own espnow module when an arriving message
+    # does not fit its receive buffer. That buffer is 250 bytes - the ESP-NOW
+    # payload limit - and the module shrinks it to each message's length and
+    # restores it on the next call, so this is a state it should not reach on
+    # traffic this small. Rare, not understood, and not a reason to stop
+    # bridging: what a rate is, the count below will say.
     faults = 0
+    reported = 0
+    last_fault = ""
+
     while True:
         try:
             bridge.pump_radio()
@@ -253,8 +268,15 @@ def main():
         except Exception as exc:            # noqa: BLE001 - deliberately total
             faults += 1
             try:
-                note("fault {}: {}: {}".format(
-                    faults, type(exc).__name__, exc))
+                described = "{}: {}".format(type(exc).__name__, exc)
+                # A fault that recurs every time round this loop would put
+                # notes on the wire faster than anything else on it, and the
+                # sender has to draw each one. So: the first of a kind, then
+                # only at widening intervals, with the running count attached.
+                if described != last_fault or faults >= reported * 4:
+                    last_fault = described
+                    reported = faults
+                    note("fault {}: {}".format(faults, described))
             except Exception:
                 pass                        # reporting must not be the thing that kills it
 
