@@ -207,6 +207,22 @@ pieces on the router.
 footprints; `Holes.dxf` only says where to put them. Import it to a user layer,
 place the footprints on the circles, then the layer has done its job.
 
+**Only `Edge.Cuts` cuts.** Geometry on a user layer is inert - it does not cut,
+does not drill, and does not reach the fab outputs - so reference geometry that
+must not become a feature belongs in `Holes.dxf`, never in `Outline.dxf`. That
+is how the header's position gets shown without the router taking it seriously.
+
+**Mark pin 1 unambiguously in the DXF.** A plain rectangle, or a row of
+identical circles, can be placed rotated 180 degrees - the same failure the
+keying section above warns about, except it happens during layout instead of at
+the bench, so the boards come back wrong rather than being caught. A
+different-diameter circle, or a small cross offset to one corner, settles it.
+
+Then **place the real footprint on the reference and stop trusting the DXF**.
+The imported geometry is a placement target, not the connector: the footprint
+carries the pads, and DRC only checks the footprint. Once it is placed, the user
+layer can be hidden.
+
 **Generate `Outline.dxf` from `Holes.dxf`** by deleting every circle except any
 that are genuine cutouts, rather than drawing the two separately. Exporting them
 independently once produced a 180 degree frame flip that would have put every
