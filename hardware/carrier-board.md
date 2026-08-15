@@ -38,6 +38,12 @@ out worse than expected.
 
 ## Geometry
 
+> **The DXFs described below no longer contain this board.** `Outline.dxf` and
+> `Holes.dxf` were replaced in place by the daughter board's geometry, which
+> supersedes this carrier - see [daughter-board.md](daughter-board.md). This
+> board's files are recoverable from commit `1a230de` if they are ever wanted;
+> the dimensions and reasoning below stand on their own without them.
+
 **162.00 x 56.00 mm**, 1.6 mm FR4. Two DXFs carry it, both in the same frame
 with the origin at the display end - X runs 0 to -162, Y runs 0 to -56.
 
