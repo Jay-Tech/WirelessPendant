@@ -41,6 +41,38 @@ _CURVE = (
 )
 
 
+# Below this, a cell the hardware calls "present" is not a reading to reason
+# about. A 1S lithium pack's own protection opens somewhere around 2.5-2.75 V,
+# and the empty connector on this board measures 42 mV - so anything under this
+# with the present bit set is a contradiction rather than a flat battery.
+_NOT_A_CELL_MV = 2500
+
+
+def percent_for_present_cell(millivolts):
+    """State of charge for a cell the PMIC has already said is fitted.
+
+    Differs from `percent_from_voltage` only below the curve. That function
+    describes the curve and returns None outside it, which is right for a pure
+    lookup. This one has been told by hardware that a cell is there, so below
+    the curve means **flat, not unknown** - and flat has to read 0%, which the
+    panel draws in red, rather than the grey "--" that means "no information".
+    Those are the two states an operator must never have swapped.
+
+    Got wrong first time by conflating an empty connector at 42 mV with a
+    nearly flat cell at 3.2 V and calling both unknown. They are three volts
+    apart. It bites earlier than it looks, too: the pendant's own 150-250 mA
+    draw depresses the terminal voltage, so a cell resting at 3.5 V can measure
+    under the curve's 3.27 V floor while still holding useful charge - and the
+    panel would have gone blank rather than red.
+    """
+    if millivolts is None:
+        return None
+    percent = percent_from_voltage(millivolts)
+    if percent is not None:
+        return percent
+    return 0 if millivolts >= _NOT_A_CELL_MV else None
+
+
 def percent_from_voltage(millivolts):
     """State of charge 0-100 for a cell at `millivolts`, or None below range.
 
@@ -98,12 +130,15 @@ class BatteryMonitor:
     def get_status(self):
         """Returns (volts, percent, is_charging). Volts and percent may be None.
 
-        `percent` comes from the voltage through `percent_from_voltage`, not
-        from the PMIC's fuel gauge - see the note on `_CURVE`. It is None
-        whenever there is nothing trustworthy to say: no PMIC, no cell, a bus
-        error, or a voltage below the curve. Callers must show the gap rather
-        than substituting a zero, which would read as flat rather than as
-        unknown.
+        `percent` comes from the voltage, not from the PMIC's fuel gauge - see
+        the note on `_CURVE`. It is None whenever there is nothing trustworthy
+        to say: no PMIC, no cell, or a bus error. Callers must show the gap
+        rather than substituting a zero, which would read as flat rather than
+        as unknown.
+
+        A cell that is fitted but below the curve reports **0**, not None - see
+        `percent_for_present_cell`. Only the cases above, where nothing is
+        known, produce None.
         """
         if self.pmu is None:
             return None, None, False
@@ -113,8 +148,11 @@ class BatteryMonitor:
                 return None, None, False
 
             millivolts = self.pmu.get_battery_voltage()
+            # percent_for_present_cell, not percent_from_voltage: presence has
+            # already been established two lines up, so below the curve is a
+            # flat cell rather than an unknown one.
             return (millivolts / 1000.0 if millivolts else None,
-                    percent_from_voltage(millivolts),
+                    percent_for_present_cell(millivolts),
                     self.pmu.is_charging())
         except OSError:
             # A transient bus error is one lost sample. The caller polls on a
