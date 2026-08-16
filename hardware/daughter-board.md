@@ -397,12 +397,91 @@ misorientation is the expensive mistake.
 
 ### Still to resolve
 
-- **The encoder header may foul the right-hand button.** A 2.54 mm connector
-  body centred on Y 58 spans roughly Y 56.7 to 59.3; a 6 mm switch at Y 53 spans
-  50 to 56. About **0.7 mm** between them, with the X 15.250 button directly
-  under the connector's end. Needs the real parts, not nominal dimensions.
 - **The pin 1 label** is spline text 0.89 x 0.60 mm. Fine on a reference layer;
   below most fabs' minimum silkscreen text height if it ever becomes silkscreen.
+- **The DXF has been overtaken by the PCB.** The header, buttons and encoder
+  connector have all moved since it was exported, and the encoder went from six
+  pins to four. The numbers above describe the template, not the board. Re-export
+  once the layout stops moving.
+
+## The header mapping, verified against the pendant
+
+Measured and confirmed on the physical handheld, 2026-08-16. This is the table
+that decides whether the board is correct, and it lived nowhere until now.
+
+| J2 pin | Column | Rows above BATT | GPIO | Function |
+|---|---|---|---|---|
+| 1 | edge | 0 | - | **+BATT**, isolated pad - see below |
+| 2 | inner | 0 | - | VBUS. Measured **0 V** without USB, **4.89 V** with. Deliberately unconnected. |
+| 4 | inner | 1 | - | GND |
+| 7 | edge | 3 | **38** | `feed_hold` -> SW1, rightmost at X 46 |
+| 9 | edge | 4 | **39** | `cycle_start` -> SW2, middle at X 27.5 |
+| 10 | inner | 4 | - | marked not connected on the pendant |
+| 11 | edge | 5 | **40** | `zero_axis` -> SW3, leftmost at X 8 |
+| 12 | inner | 5 | **10** | encoder **B** -> J3 pin 4 |
+| 14 | inner | 6 | **9** | encoder **A** -> J3 pin 3 |
+| 30 | inner | 14 | - | GND |
+| 31 | edge | 15 | - | 3V3. Measured **3.29 V**. Unused. |
+| 32 | inner | 15 | - | **+3V3**, measured **3.29 V**, feeds the encoder |
+
+Counted in **rows from the +BATT pad** rather than by pin number, because "pin 9"
+means three different things here - the pendant's own pinout, the schematic's
+`Conn_02x16_Even_Odd` numbering, and the custom footprint's pads. Rows from an
+anchor survive all three. Odd pins run up the edge-most column, even up the
+inner one, 2.54 mm per row, with pin 1 at the bottom.
+
+The GPIO column matches `BUTTON_MAP` and `ENCODER_PIN_A/B` in
+`micropython/pendant/pendant.py`. If either moves, both have to.
+
+**Pin 32 was the one worth measuring.** The whole 3V3 encoder decision rests on
+it being a regulated rail: the wheel is open-collector, so its outputs swing to
+whatever supplies it, and they reach GP9 and GP10 with no divider in the way. On
+VBAT or VBUS that is over the S3's absolute maximum. 3.29 V says it is the right
+rail.
+
+**+BATT is a single-node net** - J2 pin 1 and nothing else on the board. That is
+deliberate, and it makes the pad a **post-fab orientation test**: mate the boards
+and probe it. Battery voltage means the numbering composes correctly through the
+symbol, the footprint and the placement; 0 V or 3.3 V means one of those three
+mirrors did not cancel. Safe to probe precisely because nothing else is on it.
+
+### J3, the encoder connector
+
+`PinHeader_1x04_P2.54mm_Horizontal`, four pins rather than the six the DXF
+carried. Enough for the pendant - A, B, Vcc, GND - at the cost of not landing
+A-/B- for a future RS-422 receiver on a long cable.
+
+| J3 pin | Signal |
+|---|---|
+| 1 | +3V3 - encoder Vcc |
+| 2 | GND - encoder 0V |
+| 3 | **A** (GP9) |
+| 4 | **B** (GP10) |
+
+**This connector must be labelled on the silkscreen.** It carries 3V3 and GND
+adjacent to each other with no keying, so a cable fitted backwards puts reverse
+polarity across the wheel. Pin 1 mark plus `3V3 GND A B` costs nothing now and
+cannot be added later.
+
+### Silkscreen the board needs
+
+There is currently no free text on it at all - only reference designators and
+values. Nothing is mislabelled, but nothing is labelled either.
+
+- **J3 pin 1 and its four signals**, per above. The one with a damage path.
+- **Button functions** - `HOLD` / `START` / `ZERO`, left to right that is
+  `ZERO START HOLD`, since SW3 is leftmost.
+- **A power strip** marking 3V3 and GND.
+- **Pin 1 on J2.**
+- **Board name, revision and date.** This will iterate, and two bare boards in a
+  drawer are indistinguishable otherwise.
+
+### Rename the nets
+
+`Net-(J2-Pin_7)` and friends carry no meaning. Renaming them to `GP38`, `GP39`,
+`GP40`, `GP9` and `GP10` changes no copper - it is purely the schematic - and it
+makes the board checkable against `pendant.py` by anyone, instead of the mapping
+existing only in a table like this one and in somebody's memory.
 
 ## Getting geometry out of CAD and into KiCad
 
