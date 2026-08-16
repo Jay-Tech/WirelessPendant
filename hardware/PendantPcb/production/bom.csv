@@ -1,0 +1,4 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+J2,PinHeader_2x16_P2.54mm_Vertical_Left,1,Conn_02x16_Even_Odd,
+J3,PinHeader_1x04_P2.54mm_Horizontal,1,Conn_01x04_Socket,
+"SW1, SW2, SW3",SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243,3,SW_Push,

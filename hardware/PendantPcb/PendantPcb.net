@@ -1,0 +1,1142 @@
+(export
+	(version "E")
+	(design
+		(source "C:\\Repo\\Pico2W\\hardware\\PendantPcb\\PendantPcb.kicad_sch")
+		(date "2026-08-16T13:47:46")
+		(tool "Eeschema 10.0.5")
+		(sheet
+			(number "1")
+			(name "/")
+			(tstamps "/")
+			(title_block
+				(title "Penadant Support Board")
+				(company)
+				(rev "1")
+				(date "2026-08-16")
+				(source "PendantPcb.kicad_sch")
+				(comment
+					(number "1")
+					(value "")
+				)
+				(comment
+					(number "2")
+					(value "")
+				)
+				(comment
+					(number "3")
+					(value "")
+				)
+				(comment
+					(number "4")
+					(value "")
+				)
+				(comment
+					(number "5")
+					(value "")
+				)
+				(comment
+					(number "6")
+					(value "")
+				)
+				(comment
+					(number "7")
+					(value "")
+				)
+				(comment
+					(number "8")
+					(value "")
+				)
+				(comment
+					(number "9")
+					(value "")
+				)
+			)
+		)
+	)
+	(components
+		(comp
+			(ref "J2")
+			(value "Conn_02x16_Even_Odd")
+			(footprint "Library:PinHeader_2x16_P2.54mm_Vertical_Left")
+			(description "Generic connector, double row, 02x16, odd/even pin numbering scheme")
+			(fields
+				(field
+					(name "KiLib_Generator") "connector/pin_header_socket")
+				(field
+					(name "Comment")
+				)
+				(field
+					(name "Footprint") "Library:PinHeader_2x16_P2.54mm_Vertical_Left")
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Generic connector, double row, 02x16, odd/even pin numbering scheme")
+			)
+			(libsource
+				(lib "Connector_Generic")
+				(part "Conn_02x16_Odd_Even")
+				(description "Generic connector, double row, 02x16, odd/even pin numbering scheme")
+			)
+			(property
+				(name "KiLib_Generator")
+				(value "connector/pin_header_socket")
+			)
+			(property
+				(name "Comment")
+				(value "")
+			)
+			(property
+				(name "Sheetname")
+				(value "Root")
+			)
+			(property
+				(name "Sheetfile")
+				(value "PendantPcb.kicad_sch")
+			)
+			(property
+				(name "ki_keywords")
+				(value "connector")
+			)
+			(property
+				(name "ki_fp_filters")
+				(value "Connector*:*_2x??_*")
+			)
+			(sheetpath
+				(names "/")
+				(tstamps "/")
+			)
+			(tstamps "0fbb30a0-b81a-4500-ad67-8f13a51ceb18")
+			(units
+				(unit
+					(name "A")
+					(pins
+						(pin
+							(num "1")
+						)
+						(pin
+							(num "3")
+						)
+						(pin
+							(num "5")
+						)
+						(pin
+							(num "7")
+						)
+						(pin
+							(num "9")
+						)
+						(pin
+							(num "11")
+						)
+						(pin
+							(num "13")
+						)
+						(pin
+							(num "15")
+						)
+						(pin
+							(num "17")
+						)
+						(pin
+							(num "19")
+						)
+						(pin
+							(num "21")
+						)
+						(pin
+							(num "23")
+						)
+						(pin
+							(num "25")
+						)
+						(pin
+							(num "27")
+						)
+						(pin
+							(num "29")
+						)
+						(pin
+							(num "31")
+						)
+						(pin
+							(num "2")
+						)
+						(pin
+							(num "4")
+						)
+						(pin
+							(num "6")
+						)
+						(pin
+							(num "8")
+						)
+						(pin
+							(num "10")
+						)
+						(pin
+							(num "12")
+						)
+						(pin
+							(num "14")
+						)
+						(pin
+							(num "16")
+						)
+						(pin
+							(num "18")
+						)
+						(pin
+							(num "20")
+						)
+						(pin
+							(num "22")
+						)
+						(pin
+							(num "24")
+						)
+						(pin
+							(num "26")
+						)
+						(pin
+							(num "28")
+						)
+						(pin
+							(num "30")
+						)
+						(pin
+							(num "32")
+						)
+					)
+				)
+			)
+		)
+		(comp
+			(ref "J3")
+			(value "Conn_01x04_Socket")
+			(footprint "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Horizontal")
+			(description "Generic connector, single row, 01x04, script generated")
+			(fields
+				(field
+					(name "KiLib_Generator") "connector/JST")
+				(field
+					(name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Horizontal")
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Generic connector, single row, 01x04, script generated")
+			)
+			(libsource
+				(lib "Connector")
+				(part "Conn_01x04_Socket")
+				(description "Generic connector, single row, 01x04, script generated")
+			)
+			(property
+				(name "KiLib_Generator")
+				(value "connector/JST")
+			)
+			(property
+				(name "Sheetname")
+				(value "Root")
+			)
+			(property
+				(name "Sheetfile")
+				(value "PendantPcb.kicad_sch")
+			)
+			(property
+				(name "ki_keywords")
+				(value "connector")
+			)
+			(property
+				(name "ki_fp_filters")
+				(value "Connector*:*_1x??_*")
+			)
+			(sheetpath
+				(names "/")
+				(tstamps "/")
+			)
+			(tstamps "f3544d1d-bc11-4254-b948-40f2d74951c3")
+			(units
+				(unit
+					(name "A")
+					(pins
+						(pin
+							(num "1")
+						)
+						(pin
+							(num "2")
+						)
+						(pin
+							(num "3")
+						)
+						(pin
+							(num "4")
+						)
+					)
+				)
+			)
+		)
+		(comp
+			(ref "SW1")
+			(value "SW_Push")
+			(footprint "Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243")
+			(description "Push button switch, generic, two pins")
+			(fields
+				(field
+					(name "Comment")
+				)
+				(field
+					(name "Footprint") "Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243")
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Push button switch, generic, two pins")
+			)
+			(libsource
+				(lib "Switch")
+				(part "SW_Push")
+				(description "Push button switch, generic, two pins")
+			)
+			(property
+				(name "Comment")
+				(value "")
+			)
+			(property
+				(name "Sheetname")
+				(value "Root")
+			)
+			(property
+				(name "Sheetfile")
+				(value "PendantPcb.kicad_sch")
+			)
+			(property
+				(name "ki_keywords")
+				(value "switch normally-open pushbutton push-button")
+			)
+			(sheetpath
+				(names "/")
+				(tstamps "/")
+			)
+			(tstamps "23c95bb7-2701-4d44-9eca-c6f6151c1399")
+			(units
+				(unit
+					(name "A")
+					(pins
+						(pin
+							(num "1")
+						)
+						(pin
+							(num "2")
+						)
+					)
+				)
+			)
+		)
+		(comp
+			(ref "SW2")
+			(value "SW_Push")
+			(footprint "Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243")
+			(description "Push button switch, generic, two pins")
+			(fields
+				(field
+					(name "Comment")
+				)
+				(field
+					(name "Footprint") "Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243")
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Push button switch, generic, two pins")
+			)
+			(libsource
+				(lib "Switch")
+				(part "SW_Push")
+				(description "Push button switch, generic, two pins")
+			)
+			(property
+				(name "Comment")
+				(value "")
+			)
+			(property
+				(name "Sheetname")
+				(value "Root")
+			)
+			(property
+				(name "Sheetfile")
+				(value "PendantPcb.kicad_sch")
+			)
+			(property
+				(name "ki_keywords")
+				(value "switch normally-open pushbutton push-button")
+			)
+			(sheetpath
+				(names "/")
+				(tstamps "/")
+			)
+			(tstamps "eb944ff9-e57c-47bd-9d22-e1a4d439f7c9")
+			(units
+				(unit
+					(name "A")
+					(pins
+						(pin
+							(num "1")
+						)
+						(pin
+							(num "2")
+						)
+					)
+				)
+			)
+		)
+		(comp
+			(ref "SW3")
+			(value "SW_Push")
+			(footprint "Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243")
+			(description "Push button switch, generic, two pins")
+			(fields
+				(field
+					(name "Comment")
+				)
+				(field
+					(name "Footprint") "Button_Switch_THT:SW_PUSH_1P1T_6x3.5mm_H4.3_APEM_MJTP1243")
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Push button switch, generic, two pins")
+			)
+			(libsource
+				(lib "Switch")
+				(part "SW_Push")
+				(description "Push button switch, generic, two pins")
+			)
+			(property
+				(name "Comment")
+				(value "")
+			)
+			(property
+				(name "Sheetname")
+				(value "Root")
+			)
+			(property
+				(name "Sheetfile")
+				(value "PendantPcb.kicad_sch")
+			)
+			(property
+				(name "ki_keywords")
+				(value "switch normally-open pushbutton push-button")
+			)
+			(sheetpath
+				(names "/")
+				(tstamps "/")
+			)
+			(tstamps "eaac264c-a413-4fbf-ab71-5d53f8495156")
+			(units
+				(unit
+					(name "A")
+					(pins
+						(pin
+							(num "1")
+						)
+						(pin
+							(num "2")
+						)
+					)
+				)
+			)
+		)
+	)
+	(groups)
+	(variants)
+	(libparts
+		(libpart
+			(lib "Connector")
+			(part "Conn_01x04_Socket")
+			(description "Generic connector, single row, 01x04, script generated")
+			(footprints
+				(fp "Connector*:*_1x??_*")
+			)
+			(fields
+				(field
+					(name "Reference") "J")
+				(field
+					(name "Value") "Conn_01x04_Socket")
+				(field
+					(name "Footprint")
+				)
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Generic connector, single row, 01x04, script generated")
+			)
+			(pins
+				(pin
+					(num "1")
+					(name "Pin_1")
+					(type "passive")
+				)
+				(pin
+					(num "2")
+					(name "Pin_2")
+					(type "passive")
+				)
+				(pin
+					(num "3")
+					(name "Pin_3")
+					(type "passive")
+				)
+				(pin
+					(num "4")
+					(name "Pin_4")
+					(type "passive")
+				)
+			)
+		)
+		(libpart
+			(lib "Connector_Generic")
+			(part "Conn_02x16_Odd_Even")
+			(description "Generic connector, double row, 02x16, odd/even pin numbering scheme")
+			(footprints
+				(fp "Connector*:*_2x??_*")
+			)
+			(fields
+				(field
+					(name "Reference") "J2")
+				(field
+					(name "Value") "Conn_02x16_Even_Odd")
+				(field
+					(name "Footprint") "Connector_PinHeader_2.54mm:PinHeader_2x16_P2.54mm_Vertical")
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Generic connector, double row, 02x16, odd/even pin numbering scheme")
+				(field
+					(name "KiLib_Generator") "connector/pin_header_socket")
+				(field
+					(name "Comment")
+				)
+			)
+			(pins
+				(pin
+					(num "1")
+					(name "Pin_1")
+					(type "power_out")
+				)
+				(pin
+					(num "2")
+					(name "Pin_2")
+					(type "passive")
+				)
+				(pin
+					(num "3")
+					(name "Pin_3")
+					(type "passive")
+				)
+				(pin
+					(num "4")
+					(name "Pin_4")
+					(type "passive")
+				)
+				(pin
+					(num "5")
+					(name "Pin_5")
+					(type "passive")
+				)
+				(pin
+					(num "6")
+					(name "Pin_6")
+					(type "passive")
+				)
+				(pin
+					(num "7")
+					(name "Pin_7")
+					(type "passive")
+				)
+				(pin
+					(num "8")
+					(name "Pin_8")
+					(type "passive")
+				)
+				(pin
+					(num "9")
+					(name "Pin_9")
+					(type "passive")
+				)
+				(pin
+					(num "10")
+					(name "Pin_10")
+					(type "passive")
+				)
+				(pin
+					(num "11")
+					(name "Pin_11")
+					(type "passive")
+				)
+				(pin
+					(num "12")
+					(name "Pin_12")
+					(type "passive")
+				)
+				(pin
+					(num "13")
+					(name "Pin_13")
+					(type "passive")
+				)
+				(pin
+					(num "14")
+					(name "Pin_14")
+					(type "passive")
+				)
+				(pin
+					(num "15")
+					(name "Pin_15")
+					(type "passive")
+				)
+				(pin
+					(num "16")
+					(name "Pin_16")
+					(type "passive")
+				)
+				(pin
+					(num "17")
+					(name "Pin_17")
+					(type "passive")
+				)
+				(pin
+					(num "18")
+					(name "Pin_18")
+					(type "passive")
+				)
+				(pin
+					(num "19")
+					(name "Pin_19")
+					(type "passive")
+				)
+				(pin
+					(num "20")
+					(name "Pin_20")
+					(type "passive")
+				)
+				(pin
+					(num "21")
+					(name "Pin_21")
+					(type "passive")
+				)
+				(pin
+					(num "22")
+					(name "Pin_22")
+					(type "passive")
+				)
+				(pin
+					(num "23")
+					(name "Pin_23")
+					(type "passive")
+				)
+				(pin
+					(num "24")
+					(name "Pin_24")
+					(type "passive")
+				)
+				(pin
+					(num "25")
+					(name "Pin_25")
+					(type "passive")
+				)
+				(pin
+					(num "26")
+					(name "Pin_26")
+					(type "passive")
+				)
+				(pin
+					(num "27")
+					(name "Pin_27")
+					(type "passive")
+				)
+				(pin
+					(num "28")
+					(name "Pin_28")
+					(type "passive")
+				)
+				(pin
+					(num "29")
+					(name "Pin_29")
+					(type "passive")
+				)
+				(pin
+					(num "30")
+					(name "Pin_30")
+					(type "passive")
+				)
+				(pin
+					(num "31")
+					(name "Pin_31")
+					(type "passive")
+				)
+				(pin
+					(num "32")
+					(name "Pin_32")
+					(type "passive")
+				)
+			)
+		)
+		(libpart
+			(lib "Switch")
+			(part "SW_Push")
+			(description "Push button switch, generic, two pins")
+			(fields
+				(field
+					(name "Reference") "SW")
+				(field
+					(name "Value") "SW_Push")
+				(field
+					(name "Footprint")
+				)
+				(field
+					(name "Datasheet")
+				)
+				(field
+					(name "Description") "Push button switch, generic, two pins")
+			)
+			(pins
+				(pin
+					(num "1")
+					(name "1")
+					(type "passive")
+				)
+				(pin
+					(num "2")
+					(name "2")
+					(type "passive")
+				)
+			)
+		)
+	)
+	(libraries
+		(library
+			(logical "Connector")
+			(uri "${KICAD8_SYMBOL_DIR}/Connector.kicad_sym")
+		)
+		(library
+			(logical "Connector_Generic")
+			(uri "${KICAD8_SYMBOL_DIR}/Connector_Generic.kicad_sym")
+		)
+		(library
+			(logical "Switch")
+			(uri "${KICAD8_SYMBOL_DIR}/Switch.kicad_sym")
+		)
+	)
+	(nets
+		(net
+			(code "1")
+			(name "+3V3")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "32")
+				(pinfunction "Pin_32_32")
+				(pintype "passive")
+			)
+			(node
+				(ref "J3")
+				(pin "1")
+				(pinfunction "Pin_1_1")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "2")
+			(name "+BATT")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "1")
+				(pinfunction "Pin_1_1")
+				(pintype "power_out")
+			)
+		)
+		(net
+			(code "3")
+			(name "/(Feed_Hold) SW1-GPIO38-Pin7")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "7")
+				(pinfunction "Pin_7_7")
+				(pintype "passive")
+			)
+			(node
+				(ref "SW1")
+				(pin "1")
+				(pinfunction "1_1")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "4")
+			(name "/(Start) SW2-GPIO39-Pin9")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "9")
+				(pinfunction "Pin_9_9")
+				(pintype "passive")
+			)
+			(node
+				(ref "SW2")
+				(pin "1")
+				(pinfunction "1_1")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "5")
+			(name "/(Zero_Axis) SW3-GPIO40-Pin11")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "11")
+				(pinfunction "Pin_11_11")
+				(pintype "passive")
+			)
+			(node
+				(ref "SW3")
+				(pin "1")
+				(pinfunction "1_1")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "6")
+			(name "/A GPIO9-Pin14")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "14")
+				(pinfunction "Pin_14_14")
+				(pintype "passive")
+			)
+			(node
+				(ref "J3")
+				(pin "3")
+				(pinfunction "Pin_3_3")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "7")
+			(name "/B GPIO10-Pin12")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "12")
+				(pinfunction "Pin_12_12")
+				(pintype "passive")
+			)
+			(node
+				(ref "J3")
+				(pin "4")
+				(pinfunction "Pin_4_4")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "8")
+			(name "GND")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "30")
+				(pinfunction "Pin_30_30")
+				(pintype "passive")
+			)
+			(node
+				(ref "J2")
+				(pin "4")
+				(pinfunction "Pin_4_4")
+				(pintype "passive")
+			)
+			(node
+				(ref "J3")
+				(pin "2")
+				(pinfunction "Pin_2_2")
+				(pintype "passive")
+			)
+			(node
+				(ref "SW1")
+				(pin "2")
+				(pinfunction "2_2")
+				(pintype "passive")
+			)
+			(node
+				(ref "SW2")
+				(pin "2")
+				(pinfunction "2_2")
+				(pintype "passive")
+			)
+			(node
+				(ref "SW3")
+				(pin "2")
+				(pinfunction "2_2")
+				(pintype "passive")
+			)
+		)
+		(net
+			(code "9")
+			(name "unconnected-(J2-Pin_2-Pad2)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "2")
+				(pinfunction "Pin_2_2")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "10")
+			(name "unconnected-(J2-Pin_3-Pad3)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "3")
+				(pinfunction "Pin_3_3")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "11")
+			(name "unconnected-(J2-Pin_5-Pad5)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "5")
+				(pinfunction "Pin_5_5")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "12")
+			(name "unconnected-(J2-Pin_6-Pad6)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "6")
+				(pinfunction "Pin_6_6")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "13")
+			(name "unconnected-(J2-Pin_8-Pad8)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "8")
+				(pinfunction "Pin_8_8")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "14")
+			(name "unconnected-(J2-Pin_10-Pad10)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "10")
+				(pinfunction "Pin_10_10")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "15")
+			(name "unconnected-(J2-Pin_13-Pad13)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "13")
+				(pinfunction "Pin_13_13")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "16")
+			(name "unconnected-(J2-Pin_15-Pad15)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "15")
+				(pinfunction "Pin_15_15")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "17")
+			(name "unconnected-(J2-Pin_16-Pad16)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "16")
+				(pinfunction "Pin_16_16")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "18")
+			(name "unconnected-(J2-Pin_17-Pad17)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "17")
+				(pinfunction "Pin_17_17")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "19")
+			(name "unconnected-(J2-Pin_18-Pad18)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "18")
+				(pinfunction "Pin_18_18")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "20")
+			(name "unconnected-(J2-Pin_19-Pad19)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "19")
+				(pinfunction "Pin_19_19")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "21")
+			(name "unconnected-(J2-Pin_20-Pad20)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "20")
+				(pinfunction "Pin_20_20")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "22")
+			(name "unconnected-(J2-Pin_21-Pad21)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "21")
+				(pinfunction "Pin_21_21")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "23")
+			(name "unconnected-(J2-Pin_22-Pad22)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "22")
+				(pinfunction "Pin_22_22")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "24")
+			(name "unconnected-(J2-Pin_23-Pad23)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "23")
+				(pinfunction "Pin_23_23")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "25")
+			(name "unconnected-(J2-Pin_24-Pad24)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "24")
+				(pinfunction "Pin_24_24")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "26")
+			(name "unconnected-(J2-Pin_25-Pad25)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "25")
+				(pinfunction "Pin_25_25")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "27")
+			(name "unconnected-(J2-Pin_26-Pad26)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "26")
+				(pinfunction "Pin_26_26")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "28")
+			(name "unconnected-(J2-Pin_27-Pad27)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "27")
+				(pinfunction "Pin_27_27")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "29")
+			(name "unconnected-(J2-Pin_28-Pad28)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "28")
+				(pinfunction "Pin_28_28")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "30")
+			(name "unconnected-(J2-Pin_29-Pad29)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "29")
+				(pinfunction "Pin_29_29")
+				(pintype "passive+no_connect")
+			)
+		)
+		(net
+			(code "31")
+			(name "unconnected-(J2-Pin_31-Pad31)")
+			(class "Default")
+			(node
+				(ref "J2")
+				(pin "31")
+				(pinfunction "Pin_31_31")
+				(pintype "passive+no_connect")
+			)
+		)
+	)
+)

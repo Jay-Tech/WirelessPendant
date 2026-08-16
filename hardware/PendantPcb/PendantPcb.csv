@@ -1,0 +1,6 @@
+"Comment","Designator","Footprint"
+"SW_Push","SW3","Button_Switch_SMD:SW_Push_1P1T_NO_E-Switch_TL3301NxxxxxG"
+"SW_Push","SW2","Button_Switch_SMD:SW_Push_1P1T_NO_E-Switch_TL3301NxxxxxG"
+"SW_Push","SW1","Button_Switch_SMD:SW_Push_1P1T_NO_E-Switch_TL3301NxxxxxG"
+"Conn_01x04_Socket","J3","Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Horizontal"
+"Conn_02x16_Odd_Even","J2","Connector_PinHeader_2.54mm:PinHeader_2x16_P2.54mm_Vertical"
