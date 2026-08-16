@@ -395,14 +395,47 @@ incidental geometry; a crossed box reads as deliberate, and nothing else on the
 board looks like it. Worth the four extra lines on the connector whose
 misorientation is the expensive mistake.
 
-### Still to resolve
+> **The numbers above describe the DXF template, which the PCB has overtaken.**
+> The header, buttons and encoder connector all moved during layout, and the
+> encoder went from six pins to four. What was actually fabricated is below.
 
-- **The pin 1 label** is spline text 0.89 x 0.60 mm. Fine on a reference layer;
-  below most fabs' minimum silkscreen text height if it ever becomes silkscreen.
-- **The DXF has been overtaken by the PCB.** The header, buttons and encoder
-  connector have all moved since it was exported, and the encoder went from six
-  pins to four. The numbers above describe the template, not the board. Re-export
-  once the layout stops moving.
+## As built - PSB v1.0
+
+Read out of `PendantPcb/production/PendantPcb.zip`, so these are the numbers a
+board house works from rather than the ones the drawing intended.
+
+**54.500 x 100.000 mm**, 8-vertex outline with 2 mm corner chamfers.
+
+| Feature | Position |
+|---|---|
+| header J2, 2x16 | columns X **2.99** (odd, edge) and **5.53** (even), Y **20.66** to **58.76** at 2.540 |
+| **J2 pin 1** | **(2.99, 58.76)** - bottom of the edge column |
+| encoder J3, 1x4 horizontal | Y **88.33**, X **41.0 / 38.46 / 35.92 / 33.38** = pins 1/2/3/4 |
+| buttons SW3, SW2, SW1 | X **8.25 / 27.25 / 46.25**, pads at Y **90.0** and **96.5** |
+| mounting, 6x | X **3.0** and **51.5**, Y **3.7 / 75.7 / 97.7** |
+
+Buttons are **19.0 mm apart and centred on 27.250**, which is the board's own
+centre - worth stating because the first layout had them at 19.5 and 18.5 with
+the middle one 0.5 mm off, and unequal spacing between three caps is visible
+every time once the enclosure is on.
+
+**Four drill groups, and that is the acceptance test:**
+
+| Diameter | Plating | Count | |
+|---|---|---|---|
+| 0.300 | PTH | 2 | vias |
+| 1.000 | PTH | 36 | 32 header + 4 encoder |
+| 1.300 | PTH | 6 | three switches, two pads each |
+| 2.200 | NPTH | 6 | mounting |
+
+A 1.300 group that is missing means the switches were placed after the export -
+which happened, and produced a zip with no buttons on it at all.
+
+**Silkscreen as fabricated:** `ZERO` `START` `HOLD` over the three buttons left
+to right, `+ - A B` against J3 pins 1 to 4, `+BATT` at J2 pin 1, and `PSB v1.0`.
+Each label was checked against its pad's coordinates rather than by eye, because
+`A` and `B` were briefly attached to the wrong nets and the silkscreen would
+have inherited it.
 
 ## The header mapping, verified against the pendant
 
