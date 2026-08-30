@@ -124,8 +124,15 @@ the flash, then reflash. Leftover filesystem blocks confuse the new firmware.
 
 Both the pendant and the receiver are ESP32-S3s, and neither takes a `.uf2` —
 there is no BOOTSEL drive to drag a file onto, so flashing goes over the serial
-port with `esptool`. The build this repo runs is committed at the root:
-`ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin`.
+port with `esptool`. The build this repo runs is committed at the root, and it
+is the **`SPIRAM_OCT`** variant — these boards have octal SPIRAM, and the plain
+`ESP32_GENERIC_S3` build leaves it unused. That mismatch does not fail at the
+flash or at the boot; it surfaces much later as an allocation running out while
+the pendant paints its display, which reads as a screen bug.
+
+`setup.py` picks that variant on its own when both are sitting at the root, and
+asks when it genuinely cannot tell — two versions of the same variant, say,
+which is what a version bump leaves behind.
 
 ```bash
 python -m pip install esptool
@@ -142,14 +149,18 @@ descriptors, so Windows renumbers the board every time it is flashed. That is
 also why every tool here targets a serial number instead of a COM port.
 
 ```bash
-python -m esptool --chip esp32s3 --port COM# erase_flash
+python -m esptool --chip esp32s3 --port COM# erase-flash
 ```
 
 ```bash
-python -m esptool --chip esp32s3 --port COM# --baud 460800 write_flash -z 0 ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
+python -m esptool --chip esp32s3 --port COM# --baud 460800 write-flash -z 0 ESP32_GENERIC_S3-SPIRAM_OCT-<version>.bin
 ```
 
 Offset `0`, not the `0x1000` the original ESP32 takes.
+
+esptool 5 renamed these from `erase_flash` and `write_flash`; the underscore
+forms still run but print a deprecation warning, which in the middle of a flash
+reads like a fault. `setup.py` picks the spelling from the installed version.
 
 Reset the board and it comes up in MicroPython with a new serial number. Add
 that to `BOARDS` in [`tools/board.py`](tools/board.py): every S3 here enumerates

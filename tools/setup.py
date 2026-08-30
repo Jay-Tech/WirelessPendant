@@ -168,27 +168,70 @@ def esptool_command(name):
     return name.replace("_", "-") if major >= 5 else name
 
 
-def firmware_binary():
-    """The MicroPython build committed at the repo root.
+# The download page offers several ESP32-S3 builds, and the boards here want
+# this one. Both the pendant and the receiver report "Octal-SPIRAM" from
+# os.uname().machine, and the plain build leaves that memory unused - which
+# does not fail at the flash, or at the boot, but later and elsewhere: the
+# pendant paints a 320x480 display out of framebuffers, and the allocation that
+# runs out reads as a screen bug rather than a wrong build.
+PREFERRED_VARIANT = "SPIRAM_OCT"
 
-    Globbed rather than named so bumping the version is a file swap. Refuses to
-    choose when there are several: flashing the wrong build is silent until
-    something it does not support is imported, and by then the connection to
-    this step is gone.
+
+def resolve_firmware(explicit):
+    """Which .bin to flash. Asks when it genuinely cannot tell.
+
+    An earlier version refused outright when the repo root held more than one
+    build, which is the wrong instinct for a tool that asks about everything
+    else - and it hits at exactly the moment a version bump leaves the old file
+    beside the new one, so it greeted people mid-upgrade with a dead end.
+
+    It now picks when there is a right answer and asks when there is not, which
+    is the same rule as everywhere else here.
     """
+    if explicit:
+        # A bare filename is resolved against the repo root, because that is
+        # where the builds live and where the message below lists them from -
+        # so what someone copies out of that list works from any directory.
+        path = Path(explicit)
+        if not path.exists():
+            path = ROOT / explicit
+        if not path.exists():
+            say("no such firmware: {}".format(explicit))
+            say("  builds at the repo root:")
+            for found in sorted(ROOT.glob("*.bin")):
+                say("    {}".format(found.name))
+            return None
+        return path
+
     candidates = sorted(ROOT.glob("ESP32_GENERIC_S3*.bin"))
     if not candidates:
         say("no ESP32-S3 MicroPython build at {}".format(ROOT))
         say("  download one from micropython.org/download/ESP32_GENERIC_S3/")
         say("  and put the .bin at the repo root.")
         return None
-    if len(candidates) > 1:
-        say("more than one ESP32-S3 build at the repo root:")
-        for path in candidates:
-            say("  {}".format(path.name))
-        say("leave one, or pass --firmware.")
-        return None
-    return candidates[0]
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    preferred = [p for p in candidates if PREFERRED_VARIANT in p.name]
+    if len(preferred) == 1:
+        say("more than one ESP32-S3 build at the repo root; using the one")
+        say("these boards want:")
+        say("  {}".format(preferred[0].name))
+        say("")
+        say("The others carry no octal SPIRAM, which this hardware has. To")
+        say("override:  python tools/setup.py --firmware <name>")
+        say("")
+        return preferred[0]
+
+    # Several of the preferred variant, or none of them - usually two versions
+    # sitting side by side after an upgrade. Nothing here can tell which is
+    # wanted, so ask rather than guess, newest name last.
+    say("more than one ESP32-S3 build at the repo root, and no way to tell")
+    say("which you want:")
+    say("")
+    options = [(p.name, p) for p in (preferred or candidates)]
+    return choose("firmware", options)
 
 
 def wait_for(predicate, timeout, message):
@@ -624,8 +667,13 @@ def offer_sender_config(port):
 
 # --- the flow -------------------------------------------------------------
 
-def pick_target(role, explicit, firmware, allow_flash):
-    """Find the board to work on, flashing a blank one if that is what is there."""
+def pick_target(role, explicit, args, allow_flash):
+    """Find the board to work on, flashing a blank one if that is what is there.
+
+    Which firmware to flash is resolved here rather than up front, because that
+    is the only branch that needs it - asking someone to choose a build before
+    finding out their board does not need flashing is a question about nothing.
+    """
     if explicit:
         return board.device(explicit)
 
@@ -668,20 +716,18 @@ def pick_target(role, explicit, firmware, allow_flash):
     say()
     if not confirm("flash a blank board now?", default=True):
         return None
+
+    firmware = resolve_firmware(args.firmware)
+    if firmware is None:
+        return None
     return flash(firmware)
 
 
 def run(role, args):
-    firmware = None
-    if not args.no_flash:
-        firmware = Path(args.firmware) if args.firmware else firmware_binary()
-        if firmware is None:
-            return 1
-
     say("Setting up the {}.".format(role))
     say()
 
-    device = pick_target(role, args.device, firmware, not args.no_flash)
+    device = pick_target(role, args.device, args, not args.no_flash)
     if not device:
         return 1
 
@@ -759,9 +805,12 @@ def main():
                              "it is, and do nothing else")
     parser.add_argument("--device", default=None,
                         help="skip detection and use this board, e.g. id:XXXX")
-    parser.add_argument("--firmware", default=None,
-                        help="MicroPython .bin to flash (default: the build at "
-                             "the repo root)")
+    parser.add_argument("--firmware", metavar="FILE.bin", default=None,
+                        help="MicroPython build to flash, e.g. --firmware "
+                             "ESP32_GENERIC_S3-SPIRAM_OCT-20260824-v1.29.0.bin "
+                             "- a bare name is looked for at the repo root. "
+                             "Default: the build there, preferring the "
+                             "SPIRAM_OCT one these boards need")
     parser.add_argument("--no-flash", action="store_true",
                         help="never flash; fail instead if the board is blank")
     args = parser.parse_args()
