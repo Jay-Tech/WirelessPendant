@@ -1,8 +1,35 @@
-# Pico 2 W
+# Wireless Pendant
 
-Experiments on a Raspberry Pi Pico 2 W (RP2350 + Infineon CYW43439).
+Firmware for a wireless handwheel pendant for a grblHAL machine, and for the
+receiver board that carries it to the PC. The sender application it talks to is
+a separate project; what crosses between them is
+[the wire protocol](micropython/pendant/protocol.py) — newline-delimited JSON,
+the same either way it travels.
 
-## Board notes
+Two boards, both **ESP32-S3**:
+
+| | |
+|---|---|
+| **pendant** | the handheld — encoder wheel, touch screen, battery. Waveshare ESP32-S3-Touch-LCD-3.5 |
+| **receiver** | plugs into the sender's PC, presents a serial port, talks ESP-NOW to the pendant |
+
+The pendant reaches the sender two ways. Over **ESP-NOW** it talks to the
+receiver board, which needs no network and no credentials — this is the one it
+is built around, because an open-source pendant cannot require the builder to
+have usable WiFi in their shop. Over **WiFi** it joins the shop network and
+opens a TCP session to the sender directly; that path stays because it is the
+reference every jog constant was fitted against.
+
+New board? → [Setting up a board](#setting-up-a-board). One command.
+
+## Why there is a Pico in here
+
+The project started on a Raspberry Pi Pico 2 W, and that board is still on the
+bench as `pico` — it is the reference the ESP32 gets compared against when
+something feels wrong, which is why the notes below are kept rather than
+deleted. Nothing shipping runs on it.
+
+## Pico 2 W board notes
 
 | | |
 |---|---|
@@ -25,7 +52,58 @@ Three things that bite people on this specific board:
   smaller. Stepping A4 corrects it — worth checking which one your board has
   before you spend an evening debugging a "broken" input.
 
+## Setting up a board
+
+```bash
+python tools/setup.py
+```
+
+One command from a blank ESP32-S3 to a working pendant or receiver. It asks
+what you are setting up, finds the board, flashes MicroPython if the board
+needs it, checks the hardware matches the role, collects the WiFi and transport
+settings, installs, restarts the board and reads back what it says on the way
+up.
+
+```bash
+python tools/setup.py --pendant     # the handheld
+python tools/setup.py --receiver    # the board at the sender's PC
+python tools/setup.py --list        # what is attached, and what each one is
+```
+
+It replaces the two steps that used to be source edits: `BOARDS` in
+[`tools/board.py`](tools/board.py) and a hand-filled `secrets.py`. **If you are
+building this for the first time, this is the only thing you need to run** —
+everything below is the manual equivalent, kept because it is what to fall back
+on when a step misbehaves.
+
+Two things worth knowing about how it finds boards:
+
+- **It never opens a device it has not identified.** Only two USB descriptors
+  are eligible — MicroPython on an S3 and on a Pico. Everything else is listed
+  and skipped, and a grblHAL controller is named in that listing so you can see
+  it was seen and left alone. This matters more than it sounds: `mpremote
+  connect auto` once grabbed the STM32 controller on this bench and sent it
+  raw-REPL bytes with a machine powered.
+- **Each board records what it is**, in a `device.json` written at setup. That
+  is what lets a board be found without an entry in `BOARDS`, and it is what
+  `sync_board.py --receiver` now checks before it will write `receiver.py` over
+  a `main.py` — the pendant and the receiver are both ESP32-S3 and enumerate
+  identically, so before this the only guard was a name in a table that a new
+  build had not filled in yet.
+
+A pendant board is told apart from a receiver by the **AXP2101 power chip** at
+I²C `0x34`, which the pendant carries and a bare receiver does not — and the
+chip ID is read rather than the address pinged, so something else answering at
+that address is not mistaken for a battery.
+
+Set the receiver up on the sender's PC and it will offer to write the port into
+the sender's own config. The sender still never scans for that port itself,
+deliberately — see `PendantConfig` for why. This is not scanning; it just
+flashed the board and knows where it is.
+
 ## Flashing MicroPython
+
+The manual path, and the reference for what `setup.py` does.
 
 ### Pico 2 W
 
@@ -234,7 +312,7 @@ python tools/on_board.py micropython/pendant/selftest_link.py
 
 Each separates the failures the one above it would otherwise mask.
 
-## Wireless pendant (in progress)
+## Design notes
 
 > **Quietening the pendant for machine work.** Set `TRACE_DUMP_BUDGET = 0` in
 > [`micropython/pendant/jog.py`](micropython/pendant/jog.py) to stop the trace
@@ -249,12 +327,18 @@ Each separates the failures the one above it would otherwise mask.
 > A run with seventy trace dumps stalled the loop for a full second.
 
 
-A handheld MPG pendant — handwheel, buttons, display — that talks over WiFi to
-the **sender application**, not to the controller:
+A handheld MPG pendant — handwheel, buttons, display — that talks to the
+**sender application**, not to the controller:
 
 ```
-  Pico 2 W pendant  --WiFi-->  GrblHAL Sender (PC)  --Ethernet/USB-->  controller
+  pendant  --ESP-NOW-->  receiver (USB serial)  --\
+                                                   >-- Sender (PC) --> controller
+  pendant  --WiFi/TCP------------------------------/
 ```
+
+Either transport carries the same newline-delimited JSON, so nothing above the
+transport — jogging, buttons, the status feed — knows which one a pendant
+arrived on.
 
 ### Why not straight to the controller
 
@@ -451,7 +535,13 @@ whole of it, and it is one file with no dependencies: it imports only `sys`,
 `select`, `time`, `network` and `espnow`, all built into the ESP32 port. No
 `secrets.py` either, since ESP-NOW needs no credentials.
 
-Setting up the receiver, after flashing MicroPython above:
+Setting up the receiver is one command, which also does the flashing:
+
+```bash
+python tools/setup.py --receiver
+```
+
+The manual equivalent, after flashing MicroPython above:
 
 1. See what is attached, and note the board's serial number:
 
@@ -629,9 +719,40 @@ Restart the terminal afterwards. Existing sessions keep the old PATH.
 
 ```
 micropython/
+  pendant/              everything the handheld runs
+    pendant.py            the program; installed as main.py
+    jog.py                detents -> motion. The hard-won one; see the warning below
+    protocol.py           the wire format, shared with the sender
+    link.py               WiFi transport - joins, holds a TCP session, reconnects
+    espnow_link.py        ESP-NOW transport - broadcasts until a receiver answers
+    screen.py touch.py    UI, on ili9341.py / st7796.py / tca9554.py
+    quadrature*.py        encoder decoding, PIO and PCNT variants
+    axp2101.py            power chip: battery voltage and charge state
+    battery_monitor.py    what the screen shows, off the above
+    selftest_*.py         one per subsystem, streamed with on_board.py
+  receiver/
+    receiver.py           the whole receiver; installed as main.py
+  secrets.example.py    template -> secrets.py, or let setup.py write it
   smoke_test.py         staged board bring-up check
-  secrets.example.py    WiFi credentials template -> copy to secrets.py
+
+tools/                  run from the repo root, never on the board
+  setup.py              blank board -> working pendant or receiver
+  board.py              which board is which, and what is safe to talk to
+  sync_board.py         copy modules to a board, hash-compared
+  on_board.py           stream a script to a board and watch it run
+  mock_sender.py        stands in for the sender: accepts a pendant, moves a DRO
+  replay_pendant.py     re-run a captured session against the jog logic
+  test_*.py             host-side tests, no board needed
+
+hardware/               carrier and daughter boards, KiCad plus notes
 ```
 
-Credentials live in `secrets.py`, which is gitignored. `secrets.example.py` is
-tracked — keep the placeholders in it and never put real values there.
+Credentials live in `secrets.py`, which is gitignored — `setup.py` writes it, or
+copy `secrets.example.py` by hand. The example is tracked, so keep the
+placeholders in it and never put real values there.
+
+> **`jog.py` is not to be edited casually.** Its constants were fitted against
+> a real machine over several sessions, and its comments record the attempts
+> that failed. It also sits in series with a second rate regulator at the
+> sender end, so a change here reacts to a change there. Read
+> [Jog behaviour](#jog-behaviour--open-question) first.

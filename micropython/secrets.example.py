@@ -1,6 +1,10 @@
 """WiFi credentials template.
 
-Copy this to `secrets.py` and fill in your network. `secrets.py` is
+Normally you do not touch this file: `python tools/setup.py --pendant` asks for
+the network and the transport and writes `secrets.py` for you, scanning for
+access points from the board itself rather than making you type an SSID.
+
+To do it by hand instead, copy this and fill in your network. `secrets.py` is
 gitignored, so your credentials never reach a commit.
 
     cp secrets.example.py secrets.py
@@ -19,7 +23,7 @@ WIFI_PASSWORD = "your-network-password"
 # Optional. Sets the DHCP hostname the board announces on your LAN, which
 # makes it easier to find in your router's client list. Leave as None to
 # keep the MicroPython default.
-HOSTNAME = "pico2w"
+HOSTNAME = "pendant"
 
 # The machine running the sender application, on that network. Only used by
 # the WiFi transport below. Its absence here once cost an evening: the pendant

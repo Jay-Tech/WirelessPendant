@@ -11,7 +11,7 @@ rejected, so either end can add messages without breaking the other.
 
 Pendant -> sender:
 
-    {"t":"hello","dev":"pico2w-pendant","ver":1}
+    {"t":"hello","dev":"wireless-pendant","ver":1}
     {"t":"jog","axis":"X","det":3,"step":0.1}     handwheel moved 3 detents
     {"t":"jog_cancel"}                            wheel stopped / axis changed
     {"t":"btn","id":"feed_hold","down":true}
@@ -35,7 +35,12 @@ except ImportError:  # pragma: no cover - CPython always has it
     import ujson as json
 
 VERSION = 1
-DEVICE = "pico2w-pendant"
+
+# Goes on the wire in every hello. The sender reports it and does not match on
+# it, so this is a label for whoever is reading a capture or a console rather
+# than an identifier anything keys off - but it is still a protocol value, so
+# change it deliberately and not because a folder was renamed.
+DEVICE = "wireless-pendant"
 
 # Pendant -> sender
 T_HELLO = "hello"

@@ -142,8 +142,22 @@ def sync_receiver(device, force):
     # needs no edit here: board.py names them receiver, receiver2 and so on.
     # A board with no name at all is allowed through, because a receiver being
     # set up for the first time has not been named yet.
+    # The board's own marker is asked first, and it is the better answer: it
+    # travels with the hardware, so it protects a board that is not in the local
+    # table at all - which was every board on anyone else's bench. The name
+    # prefix stays as the fallback for boards set up before the marker existed.
+    marker = board.read_marker(device)
+    if marker and marker.get("role") != board.RECEIVER_ROLE:
+        print("{} says it is the {}, not a receiver."
+              .format(device, marker.get("role")))
+        print("  Installing receiver.py as main.py there would replace that")
+        print("  board's entry point. Set it up as a receiver on purpose with:")
+        print("    python tools/setup.py --receiver --device {}".format(device))
+        return 1
+
     names = sorted(n for n, d in board.BOARDS.items() if d == device)
-    if names and not any(n.startswith(board.RECEIVER_PREFIX) for n in names):
+    if marker is None and names and not any(
+            n.startswith(board.RECEIVER_PREFIX) for n in names):
         print("{} is '{}' in board.py, not a receiver."
               .format(device, "/".join(names)))
         print("  Installing receiver.py as main.py there would replace that")

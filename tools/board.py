@@ -28,9 +28,11 @@ consequences, which is why every tool targets an explicit ID and why the
 listing below marks devices that are not Picos.
 """
 
+import json
 import os
 import subprocess
 import sys
+import time
 
 # The boards on this bench, by name. Serial numbers rather than COM ports: the
 # ESP32-S3 presents different USB descriptors in MicroPython and in its ROM
@@ -42,8 +44,8 @@ BOARDS = {
     "pendant": "id:441BF6856C480000",   # the same board, under the name that
                                         # says what it is rather than what
                                         # chip is on it
-    "receiver": "id:ACA7042DFB100000",  # ESP32-S3, the ESP-NOW end at the PC
-    "receiver2": "id:68EE8F50B2840000", # second one, on the bench, for testing
+    "receiver2": "id:ACA7042DFB100000",  # ESP32-S3, the ESP-NOW end at the PC
+    "receiver": "id:68EE8F50B2840000", # second one, on the bench, for testing
                                         # toward the production unit
 }
 
@@ -75,6 +77,40 @@ KNOWN = {
     "0483:5740": "STM32 - grblHAL CONTROLLER, DO NOT TARGET",
 }
 
+# The same descriptors again, named, because code that reasons about them
+# should not be matching string literals against a display table. KNOWN is for
+# printing; these are for deciding.
+ROM_BOOTLOADER = "303a:1001"
+MICROPYTHON_S3 = "303a:4001"
+MICROPYTHON_PICO = "2e8a:0005"
+CONTROLLER = "0483:5740"
+
+# The only descriptors anything here may open a REPL against.
+#
+# An allowlist rather than a blocklist, and the difference is the whole point.
+# Blocking the controller's descriptor would still leave every unrecognised
+# device - a USB-serial adapter, a 3D printer, a modem - eligible for a raw-REPL
+# handshake, and "unrecognised" is exactly what a controller behind a different
+# USB bridge looks like. Nothing outside this tuple is opened at all.
+TALKABLE = (MICROPYTHON_S3, MICROPYTHON_PICO)
+
+# What a board says it is, written on the board itself at setup.
+#
+# The BOARDS table above is this bench's, and every entry in it is wrong for
+# anyone else - which is the first thing a new builder hits, before any tool
+# runs. A board that carries its own role needs no table entry, so setup.py
+# writes one and resolution below falls back to reading it.
+#
+# It also makes the receiver guard enforceable. sync_board.py has to refuse to
+# write receiver.py over the pendant's main.py, and until now the only thing it
+# could check was a name in the local table - so a board absent from that table
+# was unprotected. The marker travels with the hardware.
+MARKER = "device.json"
+
+PENDANT_ROLE = "pendant"
+RECEIVER_ROLE = "receiver"
+ROLES = (PENDANT_ROLE, RECEIVER_ROLE)
+
 
 def device(explicit=None):
     """Resolve the device string: explicit argument, then env, then default.
@@ -83,9 +119,20 @@ def device(explicit=None):
     works as well as the serial number it stands for. PICO_DEVICE takes either
     too, which keeps `set PICO_DEVICE=pico` as a way to point a whole session
     at the other board.
+
+    A role name that is not in BOARDS falls back to asking the attached boards
+    which of them is that role. The table still wins where it has an entry, so
+    this bench behaves exactly as before; the fallback is for a build where
+    nobody has edited BOARDS, and it costs a device scan only in that case.
     """
     chosen = explicit or os.environ.get("PICO_DEVICE") or DEFAULT_DEVICE
-    return BOARDS.get(chosen, chosen)
+    if chosen in BOARDS:
+        return BOARDS[chosen]
+    if chosen in ROLES:
+        found = find_by_role(chosen)
+        if found:
+            return found
+    return chosen
 
 
 def port(explicit=None):
@@ -138,6 +185,100 @@ def connected():
         if len(parts) >= 3:
             found.append((parts[0], " ".join(parts[1:])))
     return found
+
+
+def attached():
+    """The same listing as connected(), but parsed into fields.
+
+    `mpremote devs` prints "<port> <serial> <vid:pid> <manufacturer> <product>",
+    and connected() flattens everything after the port into one string - which
+    is why its callers match by substring. That is fine for a human-facing
+    listing and no good for deciding whether a device may be opened, where
+    "0483:5740 appears somewhere in this line" is a weaker test than it looks.
+
+    Returns dicts with port, serial, vidpid and description. A device with no
+    USB serial reports "0000:0000" and a serial of None, which is neither an
+    error nor anything to talk to.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "mpremote", "devs"],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    found = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        serial = parts[1]
+        found.append({
+            "port": parts[0],
+            "serial": None if serial in ("None", "") else serial,
+            "vidpid": parts[2].lower(),
+            "description": " ".join(parts[3:]),
+            "label": KNOWN.get(parts[2].lower(), ""),
+        })
+    return found
+
+
+def talkable():
+    """Attached boards it is safe to open a REPL against. See TALKABLE."""
+    return [d for d in attached() if d["vidpid"] in TALKABLE]
+
+
+def read_marker(dev):
+    """Read the board's own account of what it is, or None if it has none.
+
+    None is the ordinary answer for a board set up before this existed, so it
+    means "unknown", never "wrong". Callers fall back to the BOARDS table.
+    """
+    script = (
+        "try:\n"
+        "    print(open('{}').read())\n"
+        "except Exception:\n"
+        "    print('')\n".format(MARKER)
+    )
+    code, output = mpremote(dev, "exec", script)
+    if code != 0 or not output.strip():
+        return None
+    try:
+        return json.loads(output.strip())
+    except ValueError:
+        # Truncated or hand-edited. Treated as absent rather than fatal: the
+        # marker is a convenience, and a tool that refused to run because of a
+        # damaged one would be worse than the table it replaced.
+        return None
+
+
+def write_marker(dev, role, extra=None):
+    """Record on the board what it is. Returns True if it landed."""
+    payload = {"role": role, "written": time.strftime("%Y-%m-%d")}
+    payload.update(extra or {})
+    # json.dumps then repr: the whole document goes across as one Python string
+    # literal, so nothing in it has to survive a shell or mpremote's own
+    # argument splitting.
+    text = json.dumps(payload)
+    script = "f=open('{}','w')\nf.write({})\nf.close()\n".format(MARKER, repr(text))
+    code, _ = mpremote(dev, "exec", script)
+    return code == 0
+
+
+def find_by_role(role):
+    """The attached board that says it is `role`, as an id: string.
+
+    Returns None when none says so, and also when more than one does - an
+    ambiguous answer must not be resolved by picking the first, which is the
+    `connect auto` mistake wearing a different hat. The caller reports it and
+    asks for --device.
+    """
+    matches = []
+    for dev in talkable():
+        if not dev["serial"]:
+            continue
+        marker = read_marker("id:" + dev["serial"])
+        if marker and marker.get("role") == role:
+            matches.append("id:" + dev["serial"])
+    return matches[0] if len(matches) == 1 else None
 
 
 def main():
