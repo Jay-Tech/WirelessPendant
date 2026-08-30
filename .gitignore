@@ -68,3 +68,6 @@ wifi_config.py
 # Captured pendant/session output, e.g.
 #   python -u tools/run_pendant.py | Tee-Object -FilePath pendant.log
 *.log
+/hardware/PendantPcbExport
+/hardware/PendantPcb/PendantPcb-backups
+/hardware/ReversePolarityPcb/PolarityProtector
