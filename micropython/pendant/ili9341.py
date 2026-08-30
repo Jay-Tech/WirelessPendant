@@ -95,8 +95,13 @@ class ILI9341:
             self._reset_fn = None
             self._rst = Pin(rst, Pin.OUT, value=1) if rst is not None else None
 
+        self._backlight_pin = backlight
         self._backlight = (Pin(backlight, Pin.OUT, value=1)
                            if backlight is not None else None)
+        # Built on first use rather than here, so a board or a port without PWM
+        # costs nothing and every existing caller of backlight() is unaffected.
+        self._backlight_pwm = None
+        self._pwm_unavailable = False
 
         madctl, self.width, self.height = self.ROTATIONS[rotation]
 
@@ -151,8 +156,43 @@ class ILI9341:
         time.sleep_ms(20)
 
     def backlight(self, on):
-        if self._backlight is not None:
-            self._backlight(1 if on else 0)
+        self.set_brightness(1.0 if on else 0.0)
+
+    def set_brightness(self, level):
+        """Backlight from 0.0 to 1.0, by PWM where the port has it.
+
+        The backlight is the largest single load on this device - 100-150 mA of
+        it against 50-120 mA for the CPU and radio together - so turning it down
+        while nobody is looking is most of what a pendant can do about its own
+        battery. Turning it *off* would save slightly more and is not worth it:
+        a dim DRO can still be read at a glance from the machine, and a blank
+        one has to be woken before it can answer the question that prompted the
+        glance.
+
+        Falls back to on/off where PWM is unavailable, so the driver stays
+        usable on any port. The threshold is deliberately low - anything the
+        caller meant as "dimmed" is still meant as "lit".
+        """
+        if self._backlight is None:
+            return
+
+        level = min(max(level, 0.0), 1.0)
+
+        if self._backlight_pwm is None and not self._pwm_unavailable:
+            try:
+                from machine import PWM
+                # 1 kHz: fast enough that no eye or camera sees it flicker, and
+                # clear of the few-hundred-hertz range where a backlight's own
+                # inductor can be heard whining in a quiet shop.
+                self._backlight_pwm = PWM(Pin(self._backlight_pin),
+                                          freq=1000)
+            except (ImportError, ValueError, TypeError, AttributeError):
+                self._pwm_unavailable = True
+
+        if self._backlight_pwm is not None:
+            self._backlight_pwm.duty_u16(int(65535 * level))
+        else:
+            self._backlight(1 if level > 0.05 else 0)
 
     # --- drawing ----------------------------------------------------------
 

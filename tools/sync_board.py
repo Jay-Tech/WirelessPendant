@@ -47,7 +47,8 @@ RECEIVER = ROOT / "micropython" / "receiver" / "receiver.py"
 # import - which reads like a packaging problem rather than a missing file.
 MODULES = ["quadrature.py", "quadrature_pcnt.py", "protocol.py", "link.py",
            "espnow_link.py", "jog.py", "buttons.py", "ili9341.py",
-           "st7796.py", "tca9554.py", "screen.py", "touch.py"]
+           "st7796.py", "tca9554.py", "screen.py", "touch.py",
+           "axp2101.py", "battery_monitor.py"]
 EXTRA = [ROOT / "micropython" / "secrets.py"]
 
 DEFAULT_DEVICE = board.device()
@@ -216,6 +217,30 @@ def sync_pendant(device, force, install_entry):
         skipped += 1 - wrote
 
     print("\n{} copied, {} already current".format(copied, skipped))
+
+    # Not installing it is the right default, but staying quiet about it is not.
+    #
+    # A board can sit with every module current and an entry point months old,
+    # because this sync keeps one and never touches the other. That happened:
+    # the pendant ran for weeks with a main.py from before the battery work
+    # while axp2101.py, battery_monitor.py and screen.py were all up to date
+    # beside it. The panel showed "--" for charge, which is exactly what a
+    # current screen.py paints before anything calls set_battery - so the
+    # symptom was a blank field rather than an error, and it read as a hardware
+    # fault. The cell was at 79%.
+    #
+    # Hash-compared under its own name it would have been caught by the loop
+    # above; the source is pendant.py and the destination main.py, so it needs
+    # its own check. Cheap, and it turns a silent staleness into a visible one.
+    if not install_entry and remote is not None:
+        entry = PENDANT / "pendant.py"
+        if entry.exists() and "main.py" in remote:
+            if remote["main.py"] != local_hash(entry):
+                print("\n  NOTE: main.py on the board is not this pendant.py.")
+                print("  The modules above are current; the program that uses")
+                print("  them is not. On battery, with no host attached, the")
+                print("  board runs main.py - so that is what you are testing.")
+                print("  Install it with:  python tools/sync_board.py --main")
     if copied:
         print("restart the pendant for the new modules to take effect")
     if install_entry:

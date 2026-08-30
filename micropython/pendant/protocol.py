@@ -16,6 +16,7 @@ Pendant -> sender:
     {"t":"jog_cancel"}                            wheel stopped / axis changed
     {"t":"btn","id":"feed_hold","down":true}
     {"t":"ping","seq":42}
+    {"t":"battery","v":4.02,"pct":81,"chg":true}  v and pct may be absent
 
 Sender -> pendant:
 
@@ -45,6 +46,7 @@ T_ZERO = "zero"
 T_MODE = "mode"
 T_PROBE = "probe"
 T_PING = "ping"
+T_BATTERY = "battery"
 
 # Sender -> pendant
 T_STATUS = "status"
@@ -136,6 +138,28 @@ def probe(operation):
 
 def ping(seq):
     return {"t": T_PING, "seq": seq}
+
+
+def battery(volts, percent, charging):
+    """The pendant's own charge, for the screen the operator is watching.
+
+    Its own message rather than fields on `ping`, although ping already flows
+    every three seconds and would have carried this for free. Ping is built in
+    the link layer, which has no business knowing what a battery is; keeping
+    them apart is the difference between adding a field and threading a sensor
+    through a transport.
+
+    `volts` and `percent` may both be None - no cell fitted, or a reading the
+    pendant will not vouch for. Sent anyway, because "the pendant cannot say"
+    is itself worth showing, and a sender that simply stopped hearing about the
+    battery could not tell that from a pendant that had gone quiet.
+    """
+    message = {"t": T_BATTERY, "chg": bool(charging)}
+    if volts is not None:
+        message["v"] = round(volts, 2)
+    if percent is not None:
+        message["pct"] = int(percent)
+    return message
 
 
 def status(state, wpos, feed_override=100, spindle_override=100):

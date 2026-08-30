@@ -50,10 +50,13 @@ The BOM is the argument:
 | ESP32-S3-Touch-LCD-3.5 |
 | MPG handwheel |
 | 3 x panel-mount buttons |
-| 2 x 22 kOhm |
-| 1 x small fixed 5 V boost module |
 | LiPo cell |
 | Enclosure |
+
+**No discrete parts at all.** The 5 V boost module and the 22 kOhm pair were on
+this list until 2026-08-15; both are gone, measured out rather than reasoned
+out - see "The encoder runs at 3V3" below. Five orderable items, no passives,
+which is a stronger version of the argument this section is making.
 
 No carrier PCB, no charger module, no power-path IC, no battery sense divider,
 no power button wiring, no display connector. Someone can order that list and
@@ -85,8 +88,45 @@ screen, and 8 MB PSRAM, enough for a full 320x480x2 framebuffer.
   protection, fuel gauge and on/off button are all on it.
 - **5 V is USB only.** The schematic has three power nets - VBUS, VBAT, VSYS -
   and one power IC, the AXP2101, whose outputs all step down. There is no net
-  called 5V and no boost anywhere. So the encoder still needs a small 3V3 to 5 V
-  boost, about 30 mA, exactly as sized for the carrier board.
+  called 5V and no boost anywhere. This was read as "the encoder still needs a
+  small 3V3 to 5 V boost, about 30 mA"; it turned out the encoder did not need
+  5 V at all. See below.
+
+## The encoder runs at 3V3, so there is no boost
+
+Measured 2026-08-15. The encoder runs from the board's regulated 3V3 with
+**both 22 kOhm removed**, and that is better than the arrangement it replaces
+rather than merely cheaper.
+
+**The interface was never the problem.** This wheel is open-collector with an
+internal pull-up, so its output level is whatever its own supply is. On 3V3 with
+nothing external it presents a clean 3.3 V high straight to the GPIO. The old
+5 V arrangement put 5 V through a 22 kOhm to ground and landed at **3.06 V** -
+so the "under-driven encoder" the README warned about describes the *previous*
+wiring more than this one. Against the ESP32-S3's ~2.48 V input-high threshold,
+3.3 V has the better margin.
+
+**The resistors have to come out with the supply change, not after it.** Keeping
+them at 3V3 divides against the internal pull-up and gives about **2.06 V**,
+under the threshold on both the RP2350 (~2.15 V) and the S3 (~2.48 V). That
+fails intermittently, which is the worst way for it to fail.
+
+**Do not take encoder Vcc from the battery rail.** Because the level follows the
+supply, VBAT puts 4.2 V on a pin whose absolute maximum is about 3.6 V - and it
+sags to ~3.2 V as the cell drains, so the level moves with the state of charge.
+The regulated rail holds it still for the whole discharge. It is a buck from the
+cell, so it can droop slightly near cutoff, but 3.2 V worst case against a
+2.48 V threshold is not a margin worth engineering around.
+
+**Evidence.** `monitor_encoder.py`, 30 s at 3V3: **4,173 detents, 16,695
+counts**, sustained 100-195 detents/s, peak 195.5, no dropouts and no rate
+collapses, three counts unaccounted at the end which is where the wheel stopped.
+`probe_encoder.py`: low 0.12 V, high >= 3.22 V, duty **48/52 and 49/51**.
+
+Note that `errors` proves nothing on this board - PCNT counts pulses and
+validates nothing, so it reads zero whatever happens. The two signals that do
+carry information are the scale check and the per-channel duty; a lopsided duty
+is how a bad joint on one channel was found during this work.
 
 ## Measured
 

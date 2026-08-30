@@ -1,0 +1,91 @@
+Cmp-Mod V01 Created by PcbNew   date = 2026-08-15T21:56:16
+
+BeginCmp
+TimeStamp = 0072384a-ac6a-406a-a743-38d0fd5c9b6f
+Path = 
+Reference = SW1;
+ValeurCmp = SW_Push;
+IdModule  = Button_Switch_SMD:SW_Push_1P1T_NO_E-Switch_TL3301NxxxxxG;
+EndCmp
+
+BeginCmp
+TimeStamp = 024e6747-6a77-42af-b07b-3713162d36e3
+Path = 
+Reference = REF**;
+ValeurCmp = MountingHole_2.2mm_M2;
+IdModule  = MountingHole:MountingHole_2.2mm_M2;
+EndCmp
+
+BeginCmp
+TimeStamp = 1a7a0a09-1d24-4ae4-bde0-09b5f0f349ff
+Path = 
+Reference = REF**;
+ValeurCmp = MountingHole_2.2mm_M2;
+IdModule  = MountingHole:MountingHole_2.2mm_M2;
+EndCmp
+
+BeginCmp
+TimeStamp = 1aca187b-b5b9-4fb9-af3c-bbb5d45a9d90
+Path = 
+Reference = J2;
+ValeurCmp = Conn_02x16_Odd_Even;
+IdModule  = Connector_PinHeader_2.54mm:PinHeader_2x16_P2.54mm_Vertical;
+EndCmp
+
+BeginCmp
+TimeStamp = 71cbbd0d-a677-46b5-9231-391ff43b0e71
+Path = 
+Reference = REF**;
+ValeurCmp = MountingHole_2.2mm_M2;
+IdModule  = MountingHole:MountingHole_2.2mm_M2;
+EndCmp
+
+BeginCmp
+TimeStamp = 731fca27-56c4-4f5b-80b9-679bb9f91f2b
+Path = 
+Reference = REF**;
+ValeurCmp = MountingHole_2.2mm_M2;
+IdModule  = MountingHole:MountingHole_2.2mm_M2;
+EndCmp
+
+BeginCmp
+TimeStamp = 7615d13d-0f0c-44c8-90d3-283b162ff9b7
+Path = 
+Reference = REF**;
+ValeurCmp = MountingHole_2.2mm_M2;
+IdModule  = MountingHole:MountingHole_2.2mm_M2;
+EndCmp
+
+BeginCmp
+TimeStamp = 8613b1a3-de91-4ac2-afa6-bc6f8cf5122b
+Path = /f3544d1d-bc11-4254-b948-40f2d74951c3
+Reference = J3;
+ValeurCmp = Conn_01x04_Socket;
+IdModule  = Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Horizontal;
+EndCmp
+
+BeginCmp
+TimeStamp = d45d6775-3c5a-4273-be42-c8430c06b08f
+Path = 
+Reference = SW2;
+ValeurCmp = SW_Push;
+IdModule  = Button_Switch_SMD:SW_Push_1P1T_NO_E-Switch_TL3301NxxxxxG;
+EndCmp
+
+BeginCmp
+TimeStamp = e1e5996d-18c3-4fbb-9a71-97a324bec06f
+Path = 
+Reference = REF**;
+ValeurCmp = MountingHole_2.2mm_M2;
+IdModule  = MountingHole:MountingHole_2.2mm_M2;
+EndCmp
+
+BeginCmp
+TimeStamp = eac1b66d-2cf7-4ed5-9404-889736390a59
+Path = 
+Reference = SW3;
+ValeurCmp = SW_Push;
+IdModule  = Button_Switch_SMD:SW_Push_1P1T_NO_E-Switch_TL3301NxxxxxG;
+EndCmp
+
+EndListe
