@@ -172,11 +172,12 @@ PLANNER_TARGET_BLOCKS = 12
 # speed. Slowing the fill cost the step that needed it and did nothing for the
 # step that overshoots.
 #
-# So the 1 mm overshoot is not the fill running blind, and its cause is not yet
-# known. What is known: the run-ahead bound should stop it at 40 mm and does
-# not - depth reached 90 mm of queued travel with lag reported at 99 mm, well
-# past the bound, in the branch that is supposed to pin emission to the drain
-# rate. Worth chasing there rather than here.
+# That was the third explanation to fail here, and the reason all three did is
+# that none of them were about this constant. The 1 mm overshoot was the
+# emission budget rounding a fractional detent up - see the cap in tick() - so
+# it was downstream of every fill setting and moved with none of them. Ruling
+# this out was still worth the runs it cost: it is what left the arithmetic as
+# the only place remaining to look.
 PLANNER_FILL_RATIO = 2.0
 
 # Hard bound on how far behind the hand the machine may run, in seconds.
@@ -513,6 +514,7 @@ class JogScheduler:
         self.planner_capacity = 0     # largest free count seen = empty planner
         self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
+        self._allow_mm = 0.0          # unspent emission budget, carried
 
         # How long a tick actually takes, measured rather than assumed.
         #
@@ -859,6 +861,7 @@ class JogScheduler:
                 self._direction = 0
                 self._queue_mm = 0.0
                 self._residual = 0
+                self._allow_mm = 0.0
                 self.stats["reversals"] += 1
                 return protocol.jog_cancel()
             self._direction = direction
@@ -953,16 +956,47 @@ class JogScheduler:
                 # inferring depth from a model - inferring it is what sent
                 # this whole effort chasing the wrong layer for days.
                 cap = self.feed
-            # Rounded, not truncated. Truncating biases every tick downwards,
-            # and the bias is what the planner feels: emitting less than the
-            # drain is exactly how depth is lost. It also lands on values that
-            # should be exact - 900/60 x 0.020 / 0.1 evaluates to
-            # 2.9999999999999996, so asking for three detents allowed two.
+            # Carried, not rounded. What the machine drains in a tick is a
+            # fractional number of detents and emission is a whole one, and at
+            # a steady feed that fraction is the *same* every tick - so
+            # discarding it is not noise that cancels out but a constant bias,
+            # in whichever direction the fraction happens to sit.
             #
-            # Harmless at a 50 ms tick where a detent is a few percent of the
-            # message; at 20 ms the same detent is a third of it.
-            allowed = int((cap / 60.0) * (self._tick_ms / 1000.0) / self.step + 0.5)
+            # At 1 mm it sat upwards, and that is the run-on. The ceiling
+            # drains (8000/60) x 27 ms = 3.6 detents and rounding granted 4, so
+            # a saturated turn commanded 11% more than the machine could
+            # execute - every tick, for as long as it was held. 15 mm/s of lag,
+            # 90 mm in a six second burst, which is what the machine measured.
+            #
+            # It is also why the run-ahead bound never caught it. The recovery
+            # branch caps at actual_feed, the machine's own drain rate, and
+            # then rounding put it back up to the same 4 detents: being past
+            # the bound emitted exactly what being under it did, so the bound
+            # had no effect to have. Three separate theories were spent on the
+            # fill above before the arithmetic here was suspected.
+            #
+            # 0.5 mm was fine for no better reason than that its fraction
+            # rounds down (5.4 -> 5), and 0.1 mm likewise. One step ran on and
+            # the others did not because of where a rounding boundary fell.
+            #
+            # Banking the remainder in millimetres makes the long-run rate
+            # exact at every step without truncating any single tick, which is
+            # what the rounding was there to avoid: truncation loses depth,
+            # because emitting less than the drain is how depth is lost.
+            #
+            # The epsilon is the one thing worth keeping from the rounding it
+            # replaces. A budget of exactly three detents is not exactly three:
+            # 900/60 x 0.020 / 0.1 evaluates to 2.9999999999999996, so a hand
+            # turning at precisely the commanded feed had a detent confiscated
+            # every tick. It is a representation error, not a real shortfall,
+            # and a billionth of a detent per tick is far below any bias that
+            # could accumulate into anything.
+            self._allow_mm += (cap / 60.0) * (self._tick_ms / 1000.0)
+            allowed = int(self._allow_mm / self.step + 1e-9)
             if allowed < 1:
+                # Never stop dead on a budget short of a single detent. The
+                # overdraft is charged below, so the rate stays honest across
+                # the ticks that follow rather than being quietly forgiven.
                 allowed = 1
 
             # No bound-based backstop here. One was tried and removed: the bound
@@ -976,6 +1010,25 @@ class JogScheduler:
                 self.stats["dropped_detents"] += abs(detents) - allowed
                 detents = allowed if detents > 0 else -allowed
                 self._residual = 0
+
+            # Charge what actually went out, not what was permitted, so a hand
+            # slower than the cap does not bank credit it never used. Capped at
+            # one detent of it: a slow passage followed by a fast one would
+            # otherwise release the whole accumulated allowance in a single
+            # tick, which is a burst of precisely the queued motion this design
+            # exists to avoid. Negative is left alone - that is the floor above
+            # being repaid.
+            self._allow_mm -= abs(detents) * self.step
+            if self._allow_mm > self.step:
+                self._allow_mm = self.step
+            elif self._allow_mm < -self.step:
+                # Bounded the other way too, so the floor above cannot run up a
+                # debt. Left unbounded, a slow passage that forces a detent per
+                # tick banks arrears that the next fast turn has to pay off
+                # before it may emit anything - which reads as a wheel that
+                # will not start, and starts are already the thing this design
+                # has had to defend most often.
+                self._allow_mm = -self.step
 
             self._queue_mm += abs(detents) * self.step
             self.commanded_mm += detents * self.step
@@ -1008,6 +1061,7 @@ class JogScheduler:
                 self._moving = False
                 self._idle_ticks = 0
                 self._direction = 0
+                self._allow_mm = 0.0
                 self.stats["cancels"] += 1
                 return protocol.jog_cancel()
 

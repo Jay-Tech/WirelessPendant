@@ -698,6 +698,82 @@ check("  and clears baseline transport lag at a fine step",
 check("  while still binding at a coarse step",
       max((9000.0 / 60.0) * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM) < 96.0, True)
 
+
+print("\nclosed loop: emission against a machine that drains")
+
+# Every check above hands the scheduler a lag_mm and asks what it emits. None
+# of them close the loop the other way round - lag is a *consequence* of
+# emission, and that half was never covered. It is why the 1 mm run-on survived
+# three rounds of hardware testing and three failed explanations: each theory
+# was tested against a fixture that could not express the fault.
+#
+# The machine modelled here executes what it was commanded at the commanded
+# feed and no faster, and hands its backlog back as lag and planner depth.
+
+
+def closed_loop(step, seconds=6.0, tick_ms=27.0, overdrive=1.15):
+    """A steady saturating turn. Returns (worst lag, commanded, executed)."""
+    enc, sched = new_scheduler()
+    sched.set_step_index(STEP_SIZES.index(step))
+    sched.planner_capacity = CAPACITY
+    sched.planner_free = CAPACITY
+    # Deltas in this harness are microseconds, so the measurement guard rejects
+    # them and whatever is set here stands. 27 ms is the period measured on the
+    # board against a nominal 20.
+    sched._tick_ms = tick_ms
+    dt = tick_ms / 1000.0
+    # Fast enough to sit on the step's ceiling, which is where the fault lives.
+    # Below it the commanded feed follows the hand, so emission and drain are
+    # the same quantity and no surplus exists to accumulate.
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    detents_per_s = (ceiling / 60.0 / step) * overdrive
+    queued = commanded = executed = worst = carry = 0.0
+    for _ in range(int(seconds / dt)):
+        moved = min(queued, (sched.feed / 60.0) * dt)
+        queued -= moved
+        executed += moved
+        if queued > worst:
+            worst = queued
+        sched.lag_mm = queued
+        sched.actual_feed = (moved / dt) * 60.0
+        held = min(CAPACITY, int(queued / step + 0.5))
+        sched.planner_free = CAPACITY - held
+        carry += detents_per_s * dt * COUNTS_PER_DETENT
+        whole = int(carry)
+        carry -= whole
+        enc.move(whole)
+        message = motion(sched.tick())
+        if message:
+            travelled = abs(message["det"]) * message["step"]
+            queued += travelled
+            commanded += travelled
+    return worst, commanded, executed
+
+
+# The fault in one line: at 1 mm the ceiling drains (8000/60) x 27 ms = 3.6
+# detents a tick, and rounding the budget to whole detents granted 4. That is
+# 11% more distance than the machine can execute, every tick, for as long as
+# the turn is held - 15 mm/s of lag, and 90 mm in a six second burst, which is
+# what the machine measured.
+for step in (0.1, 0.5, 1.0):
+    worst, commanded, executed = closed_loop(step)
+    bound = max((STEP_MAX_FEED[STEP_SIZES.index(step)] / 60.0)
+                * RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM)
+    check("{0} mm stays inside its own run-ahead bound".format(step),
+          worst <= bound, True)
+    check("  and commands no more than the machine executes",
+          commanded <= executed * 1.04, True)
+
+# Both tick periods. The bug is a rounding boundary, so which side of it a step
+# lands on moves with the tick - 0.5 mm rounds down at 27 ms and lands exactly
+# on the boundary at 20, and a measured period that drifts must not hand the
+# fault to a different step.
+for tick_ms in (20.0, 27.0):
+    for step in (0.5, 1.0):
+        _, commanded, executed = closed_loop(step, tick_ms=tick_ms)
+        check("{0} mm at a {1:.0f} ms tick does not outrun the machine"
+              .format(step, tick_ms), commanded <= executed * 1.04, True)
+
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.
 enc, sched = new_scheduler()
