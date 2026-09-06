@@ -291,35 +291,48 @@ FEED_DEADBAND = 0.10
 # out roughly a third of what seemed reasonable on paper, which says a fine step
 # wants control far more than speed.
 #
-# The coarse ones now run to the machine's real limit, because anything less
-# throws away turning the operator is actually doing. Measured on the machine at
+# The coarse ones were set to the machine's real limit, on the reasoning that
+# anything less throws away turning the operator is actually doing. Measured at
 # roughly 4 rev/s - 400 detents/s - the demand is step x 400 x 60:
 #
 #   0.5 mm -> 12000 mm/min, which X and Y can deliver in full
 #   1.0 mm -> 24000 mm/min, which nothing can, so 1 mm sheds ~38% at that speed
 #
-# So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
-# only fully usable below about 250 detents/s. That is a property of the wheel
-# and the machine, not something a ceiling can fix.
+# From which 0.5 mm was called the traverse step for a hand that turns this
+# fast. That premise has since been tested at the machine and does not hold: a
+# hand can *reach* 400 detents/s, but sustaining the 267 a full 0.5 mm traverse
+# needs is work, and it was reported as such - "got to keep spinning fast, not
+# much room to reduce". The two coarse steps are also nothing like each other to
+# drive, because the wheel speed each ceiling demands is not the same:
 #
-# The coarse pair came down from 9000 and 12000 to buy back run-off. Once the
-# planner depth target was raised the motion went smooth, and the bill arrived
-# as coast: about 0.73 s at 1 mm and F12000, which is 133 mm of table after the
-# hand stops.
+#   1.0 mm at 10000 -> 167 detents/s to saturate
+#   0.5 mm at  8000 -> 267 detents/s, 1.6x the wheel for the finer step
 #
-# Run-off scales with speed and this is the cheapest place to spend it. Depth
-# holds twelve blocks whatever the feed, but a block is what the commanded feed
-# drains in a tick, so lowering the ceiling shortens every block with it:
+# So 0.5 mm comes down to 6000, which asks 200 detents/s - near enough to 1 mm
+# that switching step no longer changes what "full speed" costs the hand. What
+# is given up is top traverse speed at the fine step, and little is lost by it:
+# 6000 mm/min is still 236 in/min, and 1 mm is the step to reach for when the
+# job is crossing the table.
+#
+# It also buys coast, which is the same currency the last trim was paid in.
+# Depth holds twelve blocks whatever the feed, but a block is what the commanded
+# feed drains in a tick, so lowering the ceiling shortens every block with it:
 #
 #   1.0 mm at 12000 -> 4.0 mm blocks -> 52 mm of depth, 13 mm to decelerate
 #   1.0 mm at 10000 -> 3.0 mm blocks -> 36 mm of depth,  9 mm to decelerate
 #   0.5 mm at  9000 -> 3.0 mm blocks -> 36 mm of depth
 #   0.5 mm at  8000 -> 2.5 mm blocks -> 30 mm of depth
+#   0.5 mm at  6000 -> 2.0 mm blocks -> 24 mm of depth
 #
-# Deliberately a trim rather than a cut. 12000 at 1 mm is genuinely wanted for
-# traversing the length of the table, so this keeps most of the top end and
-# takes roughly a quarter of the coast rather than halving both.
-STEP_MAX_FEED = (150.0, 250.0, 2500.0, 8000.0, 10000.0)
+# 1 mm stays at 10000. Nobody has reported it as hard to reach or hold, and
+# traversing the length of the table is what it is for.
+#
+# What this does not change is the precision the top of a step needs. The
+# sender snaps the commanded feed to a grid whose highest value is this ceiling,
+# so reaching it means landing within half a grid step of maximum wheel speed -
+# about 3% either way, at any ceiling. Lowering this makes that 3% cheaper to
+# sit at; it does not make it wider. See JogFeedQuantumMmPerMin in the sender.
+STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 10000.0)
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
