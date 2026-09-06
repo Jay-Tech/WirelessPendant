@@ -163,6 +163,20 @@ PLANNER_TARGET_BLOCKS = 12
 #
 # Scaling by the shortfall makes the correction fade out as the buffer fills,
 # so block length converges instead of oscillating.
+#
+# 1.4 was tried and reverted. The theory was that 2.0 outruns its own feedback -
+# depth arrives with the status frame at 10 Hz, three or four ticks apart, so a
+# fill gaining a block per tick runs blind for three or four blocks between
+# updates. It measured wrong: at 1.4 the 1 mm step still peaked at 25 blocks
+# against 26, while 0.5 mm fell from 12 blocks to 7 and became hard to get up to
+# speed. Slowing the fill cost the step that needed it and did nothing for the
+# step that overshoots.
+#
+# So the 1 mm overshoot is not the fill running blind, and its cause is not yet
+# known. What is known: the run-ahead bound should stop it at 40 mm and does
+# not - depth reached 90 mm of queued travel with lag reported at 99 mm, well
+# past the bound, in the branch that is supposed to pin emission to the drain
+# rate. Worth chasing there rather than here.
 PLANNER_FILL_RATIO = 2.0
 
 # Hard bound on how far behind the hand the machine may run, in seconds.
@@ -197,7 +211,22 @@ PLANNER_FILL_RATIO = 2.0
 # bound set close to the real figure therefore binds well before the buffer is
 # actually that deep, which is the mistake this had already made once at a fine
 # step.
-RUNAHEAD_LIMIT_S = 0.5
+# Measured at 0.5: run-on scales with feed because this is a time, so the two
+# coarse steps ran very differently on one setting. A 1 mm step at its 10000
+# ceiling is allowed (10000/60) x 0.5 = 83 mm of lead where a 0.5 mm step at
+# 6000 gets 50 mm - and 50 mm was reported as livable while 83 was "probably too
+# much". Observed lag tracked those bounds closely: 118 mm at 1 mm against
+# 40-57 mm at 0.5 mm.
+#
+# 0.3 brings 1 mm to 50 mm, which is where 0.5 mm sits now, and takes 0.5 mm to
+# 30 mm with it. The cost is that the bound engages sooner, so emission is
+# pinned at the drain rate a little more often and a few more detents are
+# discarded above it.
+#
+# Spending this rather than the ceilings is deliberate: lowering STEP_MAX_FEED
+# would buy the same run-on back by giving up top speed, and run-on is what was
+# actually complained about.
+RUNAHEAD_LIMIT_S = 0.3
 
 
 # Floor under that bound, in millimetres.
@@ -325,10 +354,31 @@ FEED_DEADBAND = 0.10
 #   0.5 mm at  9000 -> 3.0 mm blocks -> 36 mm of depth
 #   0.5 mm at  8000 -> 2.5 mm blocks -> 30 mm of depth
 #   0.5 mm at  6000 -> 2.0 mm blocks -> 24 mm of depth
+#   1.0 mm at  8000 -> 2.7 mm blocks -> 32 mm of depth
 #
-# 1 mm stays at 10000. Nobody has reported it as hard to reach or hold, and
-# traversing the length of the table is what it is for.
-STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 10000.0)
+# 1 mm followed it down to 8000, once the tick period was being measured rather
+# than assumed and the numbers underneath meant something. Two complaints, one
+# value:
+#
+#   - it wanted a hard fast start to reach the top. 10000 needs 167 detents/s;
+#     8000 needs 133, which is close to what 0.5 mm asks at its own ceiling.
+#   - it ran on further than 0.5 mm and was called "probably too much". Run-on
+#     is bounded as a time, so it scales with feed: at RUNAHEAD_LIMIT_S the
+#     ceiling permits (feed/60) x 0.3, which is 50 mm at 10000 and 40 at 8000.
+#     Some of the rest is not queue at all - status arrives at 10 Hz, so at
+#     167 mm/s about 17 mm of the measured lag is reporting latency, and that
+#     shrinks with the speed too.
+#
+# Tightening the run-ahead bound further was the alternative and was refused:
+# below MIN_RUNAHEAD_MM it stops filling the planner at all, which is the
+# starve this whole exercise was about, and it would have bought maybe 15 mm.
+#
+# What this does not change is the precision the top of a step needs. The
+# sender snaps the commanded feed to a grid whose highest value is this ceiling,
+# so reaching it means landing within half a grid step of maximum wheel speed -
+# about 3% either way, at any ceiling. Lowering this makes that 3% cheaper to
+# sit at; it does not make it wider. See JogFeedQuantumMmPerMin in the sender.
+STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 8000.0)
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
