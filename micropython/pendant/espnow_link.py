@@ -69,6 +69,12 @@ QUEUE_LIMIT = 32
 # order of magnitude longer.
 POLL_MS = 2
 
+# Consecutive failed receives before the peer is dropped and discovery starts
+# over. Several, because a single malformed frame clears itself on the next
+# poll and tearing the link down for one would cost a session for nothing; at
+# POLL_MS this is still a fraction of a second.
+RECV_ERROR_LIMIT = 20
+
 # A send taking this long or more is worth counting. Half a jog tick: at that
 # point the call has cost the scheduler a turn, which is the unit that matters
 # here rather than any absolute figure.
@@ -81,6 +87,24 @@ def log(msg):
 
 def mac_str(mac):
     return ":".join("%02X" % b for b in mac)
+
+
+def waits_for_ack(message):
+    """Whether this message is sent synchronously, waiting for the radio ack.
+
+    The ping alone, and it is not a detail. Waiting blocks the asyncio loop for
+    the length of a retry sequence, so doing it for ordinary traffic at fifty
+    messages a second locks the pendant solid against a receiver that has
+    stopped answering - see _transmit. Doing it for none of them loses
+    _last_ack, which is the only liveness this link has while the sender has
+    nothing to say, and a sender with nothing to say is the normal state until
+    it adopts the pendant.
+
+    The ping is the message that already exists to ask whether anybody is
+    there, and one waited send every PING_INTERVAL_S is affordable even when
+    every one of them fails.
+    """
+    return message.get("t") == protocol.T_PING
 
 
 def start_radio():
@@ -126,7 +150,13 @@ class PendantLink:
                       # scheduler a tick, and the worst one seen. Only this
                       # transport sets these, so the WiFi path's report is
                       # unchanged.
-                      "slow_tx": 0, "worst_tx_ms": 0}
+                      "slow_tx": 0, "worst_tx_ms": 0,
+                      # Faults that used to end the asyncio loop outright and
+                      # freeze the pendant with its UI still drawn. All three
+                      # should be zero; anything else is real and worth
+                      # chasing, but none of them may stop the loop. See _rx.
+                      "handler_errors": 0, "recv_errors": 0,
+                      "send_errors": 0}
 
         self._link = None
         self._peer = None
@@ -240,59 +270,138 @@ class PendantLink:
         log("receiver {} - link up".format(mac_str(host)))
         self._queue = [protocol.hello()]
 
-    def _transmit(self, peer, payload):
-        """One packet. Returns whether the other radio acknowledged it."""
+    def _transmit(self, peer, payload, wait=False):
+        """One packet.
+
+        `wait` picks between the two things ESPNow.send() can do, and they are
+        not interchangeable. Waiting blocks until the peer's radio acknowledges
+        or the retries give up; not waiting hands the packet to the driver and
+        returns. So the return value means "acknowledged" only when waiting, and
+        "accepted for sending" otherwise - and only the first is evidence about
+        the far end.
+
+        Not waiting is the default now, and the reason is a hard lock seen at
+        the machine rather than a preference. This call runs inside the asyncio
+        loop. Against a receiver that has stopped acknowledging - wedged, or
+        mid-reset - every packet burns its full retry sequence, and at fifty
+        messages a second the loop never catches up. Nothing else gets
+        scheduled: not the encoder, not the touch handler, not _deadline, which
+        is the very watchdog that would have dropped the peer and ended it. The
+        display holds its last frame because nothing redraws it, so it presents
+        as a pendant frozen with the UI still up, needing a power cycle.
+
+        The queue drain made it certain rather than likely. It sends without
+        awaiting between messages, so a full queue is thirty-two blocking calls
+        back to back with no chance for another task to run.
+
+        What is given up is per-packet acknowledgement of ordinary traffic. That
+        is what _last_ack was reading, so the ping keeps waiting - see _tx. One
+        blocking send every PING_INTERVAL_S cannot starve the loop, and it is
+        the message whose whole job is to ask whether anybody is there.
+        """
         if len(payload) > MAX_PAYLOAD:
             self.stats["dropped"] += 1
             return True                 # not a link failure, so do not tear down
-        # Timed, because how long this call takes is the open question about
-        # this transport.
-        #
-        # ESPNow.send() is synchronous: it waits for the peer's radio to
-        # acknowledge, and a packet that is not acknowledged first goes through
-        # its retries. At the ~1% loss measured in the shop and fifty messages
-        # a second, that is roughly one lost packet every two seconds - which
-        # is the same order as the eleven loop stalls this transport reports
-        # against WiFi's one. Suggestive, and not yet evidence.
-        #
-        # This is deliberately a measurement rather than a fix. The obvious
-        # change - sync=False - was written once, bundled with two genuinely
-        # bad changes, reverted untested, and would have been the fourth guess
-        # in a row on this link.
+        # Still timed. The numbers are what identified this, and a waited send
+        # against a dead peer is exactly what they should now be catching.
         started = time.ticks_ms()
         try:
-            acked = bool(self._link.send(peer, payload))
+            sent = bool(self._link.send(peer, payload, wait))
         except OSError:
+            return False
+        except Exception as exc:
+            # Same reasoning as the recv above: the radio raising something
+            # unexpected must cost a packet, not the loop that would have
+            # noticed the link was gone.
+            self.stats["send_errors"] += 1
+            log("radio send failed: {}".format(exc))
             return False
         elapsed = time.ticks_diff(time.ticks_ms(), started)
         if elapsed >= SLOW_TX_MS:
             self.stats["slow_tx"] += 1
         if elapsed > self.stats["worst_tx_ms"]:
             self.stats["worst_tx_ms"] = elapsed
-        # Only unicast to the current peer counts as evidence. A broadcast is
+        # Only a waited unicast to the current peer counts as evidence. An
+        # unwaited send has not heard from anyone yet, and a broadcast is
         # reported successful whether or not anything heard it, since there is
         # nobody specific to acknowledge it.
-        if acked and peer == self._peer:
+        if wait and sent and peer == self._peer:
             self._last_ack = time.ticks_ms()
-        return acked
+        return sent
 
     # --- the three loops --------------------------------------------------
 
     async def _rx(self):
-        """Poll the radio and dispatch whatever arrives."""
+        """Poll the radio and dispatch whatever arrives.
+
+        Nothing in here may raise. asyncio.gather cancels its siblings when one
+        task raises, so an exception escaping this loop stops _tx and _deadline
+        with it and run() returns - and every one of those is what keeps the
+        pendant alive. The screen holds its last frame because nothing redraws
+        it, and the encoder and touch handler are simply never scheduled again.
+
+        Presented as a pendant frozen with its UI still up, unrecoverable
+        without a power cycle, and indistinguishable at a glance from the
+        blocking-send stall that used to cause the same picture. That one made
+        the loop late; this one ends it.
+
+        A receiver reset mid-transmission is enough to produce it: the packet it
+        was part way through arrives truncated, and whatever the handler makes
+        of a half-decoded message is thrown from a place with nobody to catch
+        it. Opening the sender's serial port appears to be enough to reset the
+        receiver, which is how starting the application on the PC could stop a
+        handheld on the other side of the shop.
+        """
+        consecutive_errors = 0
+
         while True:
             try:
                 host, message = self._link.recv(0)
+                consecutive_errors = 0
             except OSError:
                 host, message = None, None
+            except Exception as exc:
+                # ESPNow.recv() raises ValueError("buffer error"), not OSError,
+                # when its receive ring is left inconsistent - which is what a
+                # receiver resetting mid-transmission produces at this end. It
+                # was caught on the machine as exactly that traceback, ending
+                # the asyncio loop and freezing the pendant with its UI still
+                # drawn.
+                #
+                # Caught by type rather than by name because the failure is the
+                # loop dying, whatever raised. A handheld that stops responding
+                # to its own stop button is worse than any error this can hide,
+                # and the counter below makes sure a hidden one is still
+                # visible.
+                consecutive_errors += 1
+                self.stats["recv_errors"] += 1
+                if consecutive_errors == 1:
+                    log("radio recv failed: {}".format(exc))
+                self._decoder.reset()
 
-            if message:
-                if host != self._peer:
-                    # Any packet is proof of a receiver, whether it is the
-                    # answer to a broadcast or the first status of a session.
-                    self._adopt_peer(host)
-                self._last_rx = time.ticks_ms()
+                # A ring that stays broken is not something this loop can talk
+                # its way out of, so the peer is dropped and discovery starts
+                # again - the same recovery a silent receiver already gets, and
+                # the radio is re-armed by add_peer when one answers.
+                if consecutive_errors >= RECV_ERROR_LIMIT:
+                    consecutive_errors = 0
+                    if self._peer is not None:
+                        self._drop_peer("receive buffer would not clear")
 
+                await asyncio.sleep_ms(POLL_MS)
+                continue
+
+            if not message:
+                await asyncio.sleep_ms(POLL_MS)
+                continue
+
+            if host != self._peer:
+                # Any packet is proof of a receiver, whether it is the answer
+                # to a broadcast or the first status of a session.
+                self._adopt_peer(host)
+            self._last_rx = time.ticks_ms()
+
+            try:
                 for decoded in self._decoder.feed(message):
                     self.stats["received"] += 1
                     if decoded.get("t") == protocol.T_PING:
@@ -300,8 +409,19 @@ class PendantLink:
                         continue
                     if self.on_message:
                         self.on_message(decoded)
-            else:
-                await asyncio.sleep_ms(POLL_MS)
+            except Exception as exc:
+                # Counted and named, not swallowed silently - a handler failing
+                # every time is a real fault and should be visible in the stats
+                # rather than only in the feel of the thing.
+                self.stats["handler_errors"] = self.stats.get(
+                    "handler_errors", 0) + 1
+                log("message handler failed: {}".format(exc))
+                self._decoder.reset()
+
+            # Yielded even when packets keep arriving. Without this the loop
+            # runs as long as the radio has something to give, which starves
+            # exactly the tasks a busy link most needs to keep running.
+            await asyncio.sleep_ms(0)
 
     async def _tx(self):
         """Drain the queue to the peer, or broadcast until there is one."""
@@ -322,14 +442,29 @@ class PendantLink:
 
             if self._queue:
                 message = self._queue.pop(0)
-                if self._transmit(self._peer, protocol.encode(message)):
+                # The ping is the one message that waits for an acknowledgement,
+                # because _last_ack is the only liveness this link has when the
+                # sender has nothing to say - and a sender with nothing to say
+                # is normal, since it only talks to an adopted pendant. Ordinary
+                # traffic is not waited on: see _transmit for what waiting on
+                # fifty messages a second does to the asyncio loop.
+                #
+                # One waited send per PING_INTERVAL_S is affordable even when it
+                # fails. It costs a single retry sequence every three seconds
+                # rather than one per jog, which the loop absorbs, and it is
+                # what lets _deadline still run and drop the peer.
+                wait = waits_for_ack(message)
+                if self._transmit(self._peer, protocol.encode(message), wait):
                     self.stats["sent"] += 1
-                else:
+                elif wait:
                     # Unacknowledged means the packet never reached the other
                     # radio. Counted rather than retried: a stale jog resent is
                     # worse than a jog lost, and the deadline below will drop
                     # the peer if this is more than a glitch.
                     self.stats["unacked"] += 1
+                else:
+                    # The driver refused it. Nothing was learned about the peer.
+                    self.stats["dropped"] += 1
                 continue
 
             if time.ticks_diff(next_ping, time.ticks_ms()) <= 0:
