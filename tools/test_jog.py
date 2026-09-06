@@ -30,8 +30,8 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          COUNTS_PER_DETENT,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND,
-                         FEED_QUANTUM_PER_MM, FEED_RISE_BAND_STEPS,
-                         FEED_FALL_BAND_STEPS, FEED_GRID_MIN_LEVELS,
+                         FEED_BANDS, FEED_RISE_BAND_STEPS,
+                         FEED_FALL_BAND_STEPS,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
                          RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM,
                          MIN_FEED_BLOCK_MS)
@@ -113,18 +113,28 @@ enc.move(4)
 check("one detent produces one jog message", motion(sched.tick()),
       {"t": "jog", "axis": "X", "det": 1, "step": 0.1})
 
+# Feed bands round DOWN, so the emission budget is deliberately under the
+# arrival rate and a fast tick sheds its surplus - see FEED_BANDS. What is
+# under test here is coalescing: many detents in a tick produce ONE message
+# carrying as many as the band allows, never a message each.
 enc, sched = new_scheduler()
 enc.move(4 * 7)
+coalesced = motion(sched.tick())
 check("seven detents in one tick coalesce into one message",
-      motion(sched.tick()), {"t": "jog", "axis": "X", "det": 7, "step": 0.1})
+      (coalesced["t"], coalesced["axis"], coalesced["step"]), ("jog", "X", 0.1))
+check("  carrying what the band allows, and no more than arrived",
+      1 < coalesced["det"] <= 7, True)
 
 enc, sched = new_scheduler()
 check("no movement produces no message", sched.tick(), None)
 
 enc, sched = new_scheduler()
 enc.move(-4 * 3)
+reversed_move = motion(sched.tick())
 check("reverse rotation gives negative detents",
-      motion(sched.tick()), {"t": "jog", "axis": "X", "det": -3, "step": 0.1})
+      reversed_move["det"] < 0, True)
+check("  and never more travel than the wheel produced",
+      abs(reversed_move["det"]) <= 3, True)
 
 print("\npartial detents")
 
@@ -158,46 +168,78 @@ check("slow steady turn loses no motion over 20 ticks", total, 10)
 
 print("\nfeed tracking")
 
-# The property the whole design rests on: distance is exactly one step per
-# detent no matter how fast the wheel turns, and only the feed varies. Scaling
-# distance instead makes how far the axis moved depend on how deep the queue
-# was when you stopped, which is the run-off this exists to avoid.
-# Rates chosen to stay inside what the step's feed ceiling can execute. Past
-# that the queue bound deliberately drops, which the drop test below covers.
+# The contract, as it now stands. Every detent that is EMITTED carries exactly
+# one step - that is what keeps this end, the sender and the controller
+# agreeing about where the axis is, and nothing may scale it.
+#
+# What is no longer promised is that every detent is emitted. Feed bands round
+# down, so the wheel is a throttle rather than a position source: turning
+# faster selects a higher band, and the surplus above what that band executes
+# is dropped. Measured at 24-41% of wheel travel across the bands.
+#
+# That was a deliberate trade and it is worth restating why, because the
+# comment this replaces argued the opposite. A constant F and exact distance
+# tracking of a varying hand cannot both hold - the only feed that tracks
+# distance exactly is one that changes on every block, and grblHAL is
+# trapezoidal with no S-curve, so a changing F is a decelerate and accelerate
+# every time. The machine showed the cost as a feed that searched constantly
+# and, at 1 mm, pinned at its ceiling. Distance fidelity was what got spent.
 per_detent = []
 for rate in (1, 2, 3):
     enc, sched = new_scheduler()
     for _ in range(SETTLE):
         enc.move(4 * rate)
         message = sched.tick()
-    per_detent.append(abs(message["det"] * message["step"]) / rate)
-check("distance per detent is identical at every turn speed",
+    per_detent.append(abs(message["step"]))
+check("every emitted detent carries exactly one step",
       all(abs(d - 0.1) < 1e-9 for d in per_detent), True)
 
-# Feed must never fall below the rate being commanded, or the shortfall queues
-# every tick and runs on after the wheel stops.
+# And never more distance than the wheel actually produced. Dropping is the
+# permitted direction; inventing motion is not.
 enc, sched = new_scheduler()
-sched.set_step_index(COARSE)             # 1.0 mm per detent
-for _ in range(SETTLE):
-    enc.move(4)                          # 1 detent per tick
-    tracked = sched.tick()
-check("feed meets the commanded rate",
-      tracked["feed"], feed_for(1, STEP_SIZES[COARSE]),
-      tol=near(feed_for(1, STEP_SIZES[COARSE])))
-
-# Feed must not exceed the commanded rate. Over-feeding makes each move finish
-# early and stop, so the planner accelerates and decelerates once per detent -
-# which is what made fine steps violent on the machine.
-enc, sched = new_scheduler()
+produced = 0
+emitted = 0.0
 for _ in range(SETTLE):
     enc.move(4 * 3)
-    fine = sched.tick()
-check("feed never exceeds the commanded rate",
-      fine["feed"], feed_for(3, 0.1), tol=near(feed_for(3, 0.1)))
+    produced += 3
+    message = sched.tick()
+    if message:
+        emitted += abs(message["det"]) * message["step"]
+check("  and the axis is never sent further than the wheel turned",
+      emitted <= produced * 0.1 + 1e-9, True)
+
+# Feed must not exceed what the hand is supplying. Over-feeding is the starve
+# condition: the machine cannot be fed at a rate the wheel is not producing, so
+# each move finishes early, the planner empties and the controller decelerates
+# into every block. The machine showed it as F8000/act2666 holding one block.
+#
+# Rounding bands down is what guarantees this, and it is the direction the old
+# nearest-rounding grid got wrong - measured commanding above supply on 40 to
+# 73% of blocks against 0 to 13% here.
+for step_index, rate in ((COARSE, 1), (MID, 3)):
+    enc, sched = new_scheduler()
+    sched.set_step_index(step_index)
+    for _ in range(SETTLE):
+        enc.move(4 * rate)
+        tracked = sched.tick()
+    asked = feed_for(rate, STEP_SIZES[step_index])
+    check("{0} mm never commands above what the hand supplies".format(
+        STEP_SIZES[step_index]), tracked["feed"] <= asked * 1.02, True)
+    # But within a band of it, or the wheel would feel dead. A band is the
+    # ease-off room the operator gets: anywhere inside one holds the same F.
+    _, prober = new_scheduler()
+    prober.set_step_index(step_index)
+    band = prober._quantum(STEP_MAX_FEED[step_index])
+    check("  and stays within one band of it",
+          tracked["feed"] >= min(asked, prober.feed_floor()) - band, True)
 
 # Which means a move lasts about a full tick, so consecutive jogs join up
-# instead of each one starting and stopping.
-move_ms = (abs(fine["det"]) * fine["step"] / (fine["feed"] / 60.0)) * 1000
+# instead of each one starting and stopping. Still true under banding: the
+# emission budget is derived from the commanded feed, so however far down a
+# band rounds, what goes out is still a tick's worth of it. `tracked` is the
+# last message from the loop above, at the mid step.
+move_ms = (abs(tracked["det"]) * tracked["step"]
+           / (tracked["feed"] / 60.0)) * 1000
 check("  so each move spans roughly a whole tick",
       abs(move_ms - TICK_MS) < TICK_MS * 0.5, True)
 
@@ -239,13 +281,17 @@ check("in-flight distance is bounded, so run-on cannot grow",
 check("  and the dropped detents are counted",
       sched.stats["dropped_detents"] > 0, True)
 
-# Within what the machine can follow, nothing is dropped at all.
-# 3 detents/tick at 0.1 mm asks for 900 mm/min, just inside the 950 ceiling.
+# Under the first band the feed still tracks the hand exactly, so nothing is
+# dropped there. Banding only sheds surplus once it is rounding down, which is
+# traverse speed - at 1 mm the first band is 33 detents/s, so every real
+# traverse bands while ordinary fine work does not.
+#
+# 2 detents/tick at 0.1 mm asks 600 mm/min, just under the 625 first band.
 enc, sched = new_scheduler()
 for _ in range(RATE_WINDOW_TICKS * 2):
-    enc.move(4 * 3)
+    enc.move(4 * 2)
     sched.tick()
-check("nothing is dropped while the machine can keep up",
+check("nothing is dropped below the first band",
       sched.stats["dropped_detents"], 0)
 
 enc, sched = new_scheduler()
@@ -259,9 +305,16 @@ enc, sched = new_scheduler()
 for _ in range(SETTLE):
     enc.move(4 * 6)
     spinning = sched.tick()
+# Banded, so not the hand's rate exactly - the band at or below it. What must
+# hold is that turning faster commands more, and never more than was supplied.
+_, band_probe = new_scheduler()
+band_probe.set_step_index(2)
+one_band = band_probe._quantum(STEP_MAX_FEED[2])
 check("fast turning raises the feed",
-      spinning["feed"], min(feed_for(6, 0.1), STEP_MAX_FEED[2]),
-      tol=near(min(feed_for(6, 0.1), STEP_MAX_FEED[2])))
+      spinning["feed"] > band_probe.feed_floor() * 2, True)
+check("  to the band at or below the hand, never above it",
+      feed_for(6, 0.1) - one_band <= spinning["feed"] <= feed_for(6, 0.1) * 1.02,
+      True)
 
 for _ in range(RATE_WINDOW_TICKS):
     sched.tick()                         # idle; the window fills with zeros
@@ -780,7 +833,7 @@ for tick_ms in (20.0, 27.0):
 
 
 print("")
-print("feed grid")
+print("feed bands")
 
 # Quantising the feed moved here from the sender, where it was four
 # configuration knobs. The pendant throttles its own emission against the feed
@@ -817,7 +870,7 @@ def steady_turn(step, fraction, seconds=4.0, tick_ms=27.0, wobble=0.12,
 # step because feed is turn_rate x step x 60, so the same hand wobble moves the
 # feed twice as far at 1 mm as at 0.5 - a flat grid is right at one step only.
 def quantum_for(step):
-    """The grid the scheduler actually uses at this step."""
+    """The band width the scheduler actually uses at this step."""
     _, probe = new_scheduler()
     probe.set_step_index(STEP_SIZES.index(step))
     return probe._quantum(STEP_MAX_FEED[STEP_SIZES.index(step)])
@@ -834,7 +887,25 @@ for step in (0.1, 0.5, 1.0):
             nearest = round(feed / quantum) * quantum
             if abs(feed - nearest) > 0.05:
                 off_grid.append((step, feed))
-check("every commanded feed lands on the step's grid", off_grid, [])
+check("every commanded feed lands on one of the step's bands", off_grid, [])
+
+# Rounded DOWN, never up. Inside a band the hand must always be supplying at
+# least what was commanded - the opposite is the starve condition, and it is
+# what rounding to nearest produced on 40 to 73% of blocks.
+for step in (0.5, 1.0):
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    band = quantum_for(step)
+    _, prober = new_scheduler()
+    prober.set_step_index(STEP_SIZES.index(step))
+    over = []
+    for k in range(1, 40):
+        want = ceiling * k / 40.0
+        got = prober._snap(want, ceiling)
+        if got > want and got > prober.feed_floor():
+            over.append((want, got))
+    check("{0} mm bands never round a feed upward".format(step), over, [])
+    check("  and the top band is the ceiling itself",
+          prober._snap(ceiling, ceiling), ceiling)
 
 # The point of the grid. grblHAL is trapezoidal with junction deviation, so
 # every change of F is a full decelerate and accelerate - a feed tracking the
@@ -943,8 +1014,8 @@ for step in (0.5, 1.0):
 # be commanded at all. At 1.5 the feed descended in double steps and sat
 # stranded a step high between them, reported from the machine as being unable
 # to hold a reduced feed at 1 mm: "only stable at the ceiling".
-check("no band exceeds one grid step, or a value becomes unreachable",
-      max(FEED_RISE_BAND_STEPS, FEED_FALL_BAND_STEPS) <= 1.0, True)
+check("no hysteresis band reaches a whole feed band",
+      max(FEED_RISE_BAND_STEPS, FEED_FALL_BAND_STEPS) < 1.0, True)
 
 # Stranded high is the starve case, not the cure for it - the condition is the
 # commanded feed exceeding what the hand supplies. Coming down off the ceiling
@@ -963,18 +1034,15 @@ check("a slowdown steps down the grid rather than skipping a value",
       abs((top - faller.feed) - step_size) < 1.0
       or faller.feed <= 100 * STEP_SIZES[COARSE] * 60 + 1, True)
 
-# The grid may never be so coarse that a step has fewer values than 0.5 mm,
-# which is the step that behaves. 1 mm scaled purely by step had eight against
-# twelve, each one 21% of a mid-range feed - very little between most of the
-# way up and the top.
+# Every step gets the same number of bands, which is what makes the steps feel
+# alike to drive: a quarter turn means the same fraction of the step's own top
+# speed everywhere. Scaling a grid per millimetre did not do this - 1 mm ended
+# up with eight values against 0.5 mm's twelve, because the ceilings are not
+# proportional to the step.
 for step in STEP_SIZES:
     ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
-    levels = ceiling / quantum_for(step)
-    check("{0} mm has at least {1} grid values".format(
-        step, FEED_GRID_MIN_LEVELS), levels >= FEED_GRID_MIN_LEVELS - 1e-9, True)
-    # And the top one is the ceiling itself, which is what makes it reachable.
-    check("  and its top value is exactly the ceiling",
-          abs(levels - round(levels)) < 1e-9, True)
+    check("{0} mm has exactly {1} bands".format(step, FEED_BANDS),
+          abs(ceiling / quantum_for(step) - FEED_BANDS) < 1e-9, True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.
