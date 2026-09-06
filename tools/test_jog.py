@@ -26,6 +26,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
                          RATE_ATTACK_TICKS, RATE_ATTACK_MARGIN,
+                         RATE_ATTACK_HOLD_TICKS,
                          COUNTS_PER_DETENT,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND,
@@ -878,6 +879,63 @@ check("a deliberate single click stays at the floor, not the grid",
 check("the fall band is wider than the rise band",
       FEED_FALL_BAND_STEPS > FEED_RISE_BAND_STEPS, True)
 
+# The attack window must not fire on noise. Detents arrive unevenly, so a
+# five-tick window clumps well above its own mean as a matter of course, and
+# deciding tick by tick turned that into feed. Measured with Poisson arrivals:
+# a steady 4800 mm/min hand at 1 mm was commanded a median 5333 and spiked to
+# the 8000 ceiling on 6% of blocks. The feed then sits above what the hand
+# supplies, which is the starve condition - the machine reported F8000/act2666
+# holding one block.
+check("the attack window needs persistence, not one tick",
+      RATE_ATTACK_HOLD_TICKS >= 2, True)
+check("  and a margin clear of a window's own spread",
+      RATE_ATTACK_MARGIN >= 1.5, True)
+
+# A steady hand must not be commanded above what it is turning. This is the
+# whole complaint - "1 mm just always searches until clamped at 8000" - and it
+# is the one property no per-tick check can see.
+def poisson(rnd, expect):
+    limit = pow(2.718281828, -expect)
+    product = 1.0
+    count = 0
+    while product > limit and count <= 60:
+        product *= rnd.random()
+        if product <= limit:
+            return count
+        count += 1
+    return count
+
+
+def steady_poisson(step, fraction, seconds=14.0, tick_ms=28.0, seed=11):
+    """Detents arriving the way a hand produces them, at a constant mean."""
+    rnd = random.Random(seed)
+    enc, sched = new_scheduler()
+    sched.set_step_index(STEP_SIZES.index(step))
+    sched._tick_ms = tick_ms
+    sched.planner_capacity = CAPACITY
+    sched.planner_free = CAPACITY - PLANNER_TARGET_BLOCKS
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    detents_per_s = (ceiling / 60.0 / step) * fraction
+    dt = tick_ms / 1000.0
+    feeds = []
+    for _ in range(int(seconds / dt)):
+        enc.move(COUNTS_PER_DETENT * poisson(rnd, detents_per_s * dt))
+        message = sched.tick()
+        if message and message.get("t") == "jog":
+            feeds.append(message["feed"])
+    return feeds[len(feeds) // 3:], detents_per_s * step * 60.0, ceiling
+
+
+for step in (0.5, 1.0):
+    for fraction in (0.4, 0.6):
+        feeds, hand, ceiling = steady_poisson(step, fraction)
+        at_ceiling = sum(1 for v in feeds if v >= ceiling)
+        check("{0} mm holding {1:.0f} never pins at its ceiling".format(step, hand),
+              at_ceiling == 0, True)
+        ordered = sorted(feeds)
+        check("  and its median tracks the hand, not above it",
+              ordered[len(ordered) // 2] <= hand * 1.10, True)
+
 # But neither may exceed a whole grid step, and this is a property of the grid
 # rather than a preference. Leaving the band puts the target more than the
 # band's width from the held value and the snap rounds to nearest, so a band
@@ -959,7 +1017,13 @@ for _ in range(RATE_WINDOW_TICKS * 2):
     sched.tick()
 
 # Then wind on hard, for less time than the long window is wide.
-for _ in range(RATE_ATTACK_TICKS):
+#
+# Long enough for the attack window to turn over, not merely to fill. Ticks are
+# computed from overlapping windows, so consecutive wins are not independent
+# evidence until the detents being judged are new ones - which is why the hold
+# outlasts the window and why this waits for it. Still six ticks against the
+# twenty of the trailing average, so the property under test is untouched.
+for _ in range(RATE_ATTACK_HOLD_TICKS):
     enc.move(FAST_PER_TICK * COUNTS_PER_DETENT)
     sched.tick()
 
@@ -972,6 +1036,12 @@ fast_rate = FAST_PER_TICK / (TICK_MS / 1000.0)
 # only to be far nearer it than the trailing average.
 check("a wind-on is seen before the long window catches up",
       seen > slow_rate * 3, True)
+# The hold has to outlast the window or it proves nothing, and stay far short
+# of the long window or it has replaced the thing it exists to pre-empt.
+check("  the attack hold outlasts its own window",
+      RATE_ATTACK_HOLD_TICKS > RATE_ATTACK_TICKS, True)
+check("  and still beats the trailing average comfortably",
+      RATE_ATTACK_HOLD_TICKS * 3 <= RATE_WINDOW_TICKS, True)
 check("and is never read as faster than the hand",
       seen <= fast_rate * 1.01, True)
 

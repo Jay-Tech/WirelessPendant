@@ -501,6 +501,37 @@ RATE_WINDOW_TICKS = max(4, 400 // TICK_MS)
 # to ease off and hold top speed, and worth keeping.
 RATE_ATTACK_TICKS = 5
 
+# Consecutive ticks the short window must win before it is believed, which
+# must be MORE than the window is long.
+#
+# Without persistence the comparison is decided tick by tick, and detents do
+# not arrive evenly - a hand is a Poisson-ish source, so a five-tick window
+# clumps well above its own mean as a matter of course. Measured with Poisson
+# arrivals: a steady hand asking 4800 mm/min at 1 mm was commanded a median
+# 5333 and spiked to the 8000 ceiling on 6% of blocks; asking 3200 it still
+# reached 8000. Reported from the machine in exactly those terms - "1 mm just
+# always searches until clamped at 8000" - and reaching the ceiling at a turn
+# far slower than should be needed.
+#
+# The feed then sits above what the hand supplies, which is the starve
+# condition: the machine cannot be fed at a rate the wheel is not producing, so
+# the planner empties and the *actual* feed collapses. The machine showed
+# F8000/act2666 holding one block.
+#
+# Exceeding the window length is the whole point, and three was tried first and
+# was not enough. Consecutive ticks are not independent evidence: they are
+# computed from windows that overlap, so one clump satisfies "three in a row"
+# on its own merely by sitting in the window for three of the five ticks it
+# occupies. Only once the window has fully turned over are the detents being
+# judged new ones - so the hold has to outlast the window, and at six a clump
+# has aged out before the count can reach it.
+#
+# Measured across both coarse steps and both a slow and a brisk hold, six
+# removes every excursion to a ceiling that three left in place. It costs
+# 7 ticks against 4 on a genuine mid-turn wind-on - 196 ms against 112 - where
+# the long window on its own takes around 400.
+RATE_ATTACK_HOLD_TICKS = RATE_ATTACK_TICKS + 1
+
 # How far above the long window the short one must read before it is believed.
 #
 # Without this the short window cannot tell a hand winding on from a hand
@@ -517,7 +548,42 @@ RATE_ATTACK_TICKS = 5
 # ramp - a ratio well over one. Holding a speed unsteadily, the two agree within
 # a few percent. So the short window is only allowed to win when it disagrees by
 # more than a hand's ordinary unsteadiness.
-RATE_ATTACK_MARGIN = 1.3
+# Raised from 1.3 with the hold above. Detents arrive unevenly, so the spread
+# of a five-tick window is around 30% of its own mean at a normal turn - which
+# made 1.3 about one standard deviation, and noise alone cleared it constantly.
+# Persistence alone was not enough: three consecutive clumps are uncommon but a
+# single one keeps the window hot for its whole five ticks, and that was still
+# reaching the ceiling on 4% of blocks.
+#
+# 1.6 with a hold of 3 measures identically to switching the attack window off
+# altogether - a steady 4800 mm/min hand at 1 mm commanded a median 4667 and
+# peaked at 6667 either way - while still seeing a mid-turn wind-on in 4 ticks,
+# which is what the window is for. The noise immunity of not having it, and the
+# response of having it.
+RATE_ATTACK_MARGIN = 1.6
+
+# How many of the attack window's own standard deviations it must lead by.
+#
+# A fixed margin cannot work, and 1.6 failing at one speed while holding at
+# another is what showed it. Detents arrive as counts, so the spread of a
+# window is set by how many it holds: at 1 mm a five-tick window carries 11
+# detents at 4800 mm/min and 7.5 at 3200, which is a 30% spread against 37%.
+# One fixed number is therefore several different confidence levels depending
+# on where the wheel happens to be - and the slower the turn, the weaker it
+# gets, which is backwards. 3200 still reached the ceiling on a margin that
+# held 4800 comfortably.
+#
+# Counting in standard deviations makes the test say the same thing everywhere:
+# believe the short window only when it leads by more than its own noise could
+# account for. For a count the spread is 1/sqrt(N), so the bar rises on its own
+# exactly when the evidence thins - which also carries it across the step
+# ladder, where a window at 0.001 mm holds a small fraction of what one at 1 mm
+# does.
+# Two rather than three. With the hold outlasting the window there is already
+# a strong independence test in front of this, so the bar here can be the
+# weaker of the two: three sigmas removed nothing further that six ticks had
+# not already removed, and stretched a real wind-on from 7 ticks to 17.
+RATE_ATTACK_SIGMAS = 2.0
 
 # How quickly the measured tick period follows a change. Slow, because it is a
 # property of the board and its workload rather than of the operator - it
@@ -597,6 +663,7 @@ class JogScheduler:
         self.planner_capacity = 0     # largest free count seen = empty planner
         self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
+        self._attack_ticks = 0        # consecutive wins by the short window
         self._allow_mm = 0.0          # unspent emission budget, carried
 
         # How long a tick actually takes, measured rather than assumed.
@@ -763,8 +830,26 @@ class JogScheduler:
             for value in self._recent[-RATE_ATTACK_TICKS:]:
                 attack_total += abs(value)
             attack_seconds = RATE_ATTACK_TICKS * self._tick_ms / 1000.0
-            attack = (attack_total / COUNTS_PER_DETENT) / attack_seconds
-            if attack > rate * RATE_ATTACK_MARGIN:
+            attack_detents = attack_total / COUNTS_PER_DETENT
+            attack = attack_detents / attack_seconds
+
+            # The bar this window has to clear, in its own standard deviations.
+            # See RATE_ATTACK_SIGMAS. Floored at the flat margin so a window
+            # holding very few detents cannot ask for less than the minimum.
+            if attack_detents > 0:
+                needed = 1.0 + RATE_ATTACK_SIGMAS / (attack_detents ** 0.5)
+            else:
+                needed = RATE_ATTACK_MARGIN
+            if needed < RATE_ATTACK_MARGIN:
+                needed = RATE_ATTACK_MARGIN
+
+            # Counted rather than decided here and now. This runs once per
+            # tick, from feed_rate.
+            if attack > rate * needed:
+                self._attack_ticks += 1
+            else:
+                self._attack_ticks = 0
+            if self._attack_ticks >= RATE_ATTACK_HOLD_TICKS:
                 rate = attack
 
         return rate
