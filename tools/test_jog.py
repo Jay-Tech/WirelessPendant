@@ -14,6 +14,7 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
+                         RATE_ATTACK_TICKS, COUNTS_PER_DETENT,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
@@ -682,6 +683,59 @@ sched.set_planner_free(35)
 check("capacity is learned from the reported maximum", sched.planner_capacity, 35)
 
 print()
+print("attack window")
+
+# The long rate window is a trailing average, so it lags a hand winding on.
+# From rest to speed across the width of the window, the average at the end of
+# the ramp is about half what is actually being turned - so the step's ceiling
+# could not be reached by arriving at the right speed, only by holding it long
+# enough for the window to refill.
+#
+# Reported from the machine as a dead stop being hard to accelerate away from,
+# while the same top speed came easily by turning slowly first and then winding
+# on. Priming leaves the window full of moving samples, so an increase reads at
+# once; the wheel speed was never the difficulty.
+
+SLOW_PER_TICK = 1
+FAST_PER_TICK = 6
+
+enc, sched = new_scheduler()
+sched.set_step(STEP_SIZES[COARSE])
+
+# Fill the window at a steady slow wind, so nothing here is a start transient.
+for _ in range(RATE_WINDOW_TICKS * 2):
+    enc.move(SLOW_PER_TICK * COUNTS_PER_DETENT)
+    sched.tick()
+
+# Then wind on hard, for less time than the long window is wide.
+for _ in range(RATE_ATTACK_TICKS):
+    enc.move(FAST_PER_TICK * COUNTS_PER_DETENT)
+    sched.tick()
+
+seen = sched.turn_rate(FAST_PER_TICK)
+slow_rate = SLOW_PER_TICK / (TICK_MS / 1000.0)
+fast_rate = FAST_PER_TICK / (TICK_MS / 1000.0)
+
+# The long window is still dominated by the slow stretch; the attack window is
+# not. Not asked to reach the hand exactly - it is only RATE_ATTACK_TICKS wide -
+# only to be far nearer it than the trailing average.
+check("a wind-on is seen before the long window catches up",
+      seen > slow_rate * 3, True)
+check("and is never read as faster than the hand",
+      seen <= fast_rate * 1.01, True)
+
+# Steady turning must be unaffected: both windows agree, so the higher of the
+# two is simply the rate.
+enc2, sched2 = new_scheduler()
+sched2.set_step(STEP_SIZES[COARSE])
+for _ in range(SETTLE):
+    enc2.move(FAST_PER_TICK * COUNTS_PER_DETENT)
+    sched2.tick()
+
+check("a steady turn reads the same as before",
+      sched2.turn_rate(FAST_PER_TICK), fast_rate, tol=fast_rate * 0.02)
+
+
 if failures:
     print("{} FAILED: {}".format(len(failures), ", ".join(failures)))
     sys.exit(1)

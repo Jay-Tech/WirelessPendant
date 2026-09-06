@@ -339,6 +339,25 @@ STEP_MAX_FEED = (150.0, 250.0, 2500.0, 8000.0, 10000.0)
 # commanded feed.
 RATE_WINDOW_TICKS = max(4, 400 // TICK_MS)
 
+# A shorter window taken alongside the long one, with the higher winning. Zero
+# disables it and leaves the plain average.
+#
+# The long window is a trailing average, and a trailing average lags a hand that
+# is speeding up. Wind from rest to 200 detents/s over 400 ms and at the end of
+# it the window still holds the whole ramp, so it reports about half the speed
+# actually being turned - which means reaching the step's ceiling requires not
+# merely arriving at that speed but holding it until the window refills.
+#
+# Felt at the machine as a dead stop being hard to accelerate away from, while
+# the same top speed came easily by turning slowly first and then winding on:
+# priming leaves the window already full of moving samples, so an increase reads
+# at once. The speed was never the difficulty; which samples the window held was.
+#
+# Taking the higher of the two only ever raises the feed, so a wind-down still
+# decays at the long window's pace - which is the behaviour that makes it easy
+# to ease off and hold top speed, and worth keeping.
+RATE_ATTACK_TICKS = 5
+
 # Per-tick trace, for catching a stall in the act.
 # Ticks without a detent before the wheel counts as no longer driving. Short,
 # because its only job is to tell a wind-down from a stall: two ticks of
@@ -531,7 +550,21 @@ class JogScheduler:
         # after a strong start.
         samples = len(self._recent) or 1
         seconds = samples * TICK_MS / 1000.0
-        return (total / COUNTS_PER_DETENT) / seconds
+        rate = (total / COUNTS_PER_DETENT) / seconds
+
+        # And the same measurement over the last few ticks, which is what
+        # notices a hand winding on before the long window has caught up. See
+        # RATE_ATTACK_TICKS.
+        if RATE_ATTACK_TICKS and samples > RATE_ATTACK_TICKS:
+            attack_total = 0
+            for value in self._recent[-RATE_ATTACK_TICKS:]:
+                attack_total += abs(value)
+            attack_seconds = RATE_ATTACK_TICKS * TICK_MS / 1000.0
+            attack = (attack_total / COUNTS_PER_DETENT) / attack_seconds
+            if attack > rate:
+                rate = attack
+
+        return rate
 
     def set_planner_free(self, free):
         """Record the controller's free planner slots, and learn its capacity.
