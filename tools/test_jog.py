@@ -3,6 +3,7 @@
     python tools/test_jog.py
 """
 
+import random
 import sys
 import types
 from pathlib import Path
@@ -28,6 +29,8 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          COUNTS_PER_DETENT,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND,
+                         FEED_QUANTUM_PER_MM, FEED_RISE_BAND_STEPS,
+                         FEED_FALL_BAND_STEPS,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
                          RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM,
                          MIN_FEED_BLOCK_MS)
@@ -773,6 +776,96 @@ for tick_ms in (20.0, 27.0):
         _, commanded, executed = closed_loop(step, tick_ms=tick_ms)
         check("{0} mm at a {1:.0f} ms tick does not outrun the machine"
               .format(step, tick_ms), commanded <= executed * 1.04, True)
+
+
+print("")
+print("feed grid")
+
+# Quantising the feed moved here from the sender, where it was four
+# configuration knobs. The pendant throttles its own emission against the feed
+# it believes it commanded, so while the sender did the snapping that belief
+# was wrong by up to a whole grid step - two places deciding one number.
+
+
+def steady_turn(step, fraction, seconds=4.0, tick_ms=27.0, wobble=0.12,
+                seed=1):
+    """A hand holding a speed, imperfectly. Returns the feeds commanded."""
+    rnd = random.Random(seed)
+    enc, sched = new_scheduler()
+    sched.set_step_index(STEP_SIZES.index(step))
+    sched._tick_ms = tick_ms
+    sched.planner_capacity = CAPACITY
+    sched.planner_free = CAPACITY - PLANNER_TARGET_BLOCKS
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    detents_per_s = (ceiling / 60.0 / step) * fraction
+    dt = tick_ms / 1000.0
+    feeds = []
+    carry = 0.0
+    for _ in range(int(seconds / dt)):
+        carry += detents_per_s * (1.0 + rnd.uniform(-wobble, wobble))             * dt * COUNTS_PER_DETENT
+        whole = int(carry)
+        carry -= whole
+        enc.move(whole)
+        message = sched.tick()
+        if message and message.get("t") == "jog":
+            feeds.append(message["feed"])
+    return feeds
+
+
+# Every commanded feed sits on the step's own grid. The grid scales with the
+# step because feed is turn_rate x step x 60, so the same hand wobble moves the
+# feed twice as far at 1 mm as at 0.5 - a flat grid is right at one step only.
+off_grid = []
+for step in (0.1, 0.5, 1.0):
+    quantum = FEED_QUANTUM_PER_MM * step
+    for fraction in (0.45, 0.95):
+        for feed in steady_turn(step, fraction):
+            if abs(feed / quantum - round(feed / quantum)) > 1e-6:
+                off_grid.append((step, feed))
+check("every commanded feed lands on the step's grid", off_grid, [])
+
+# The point of the grid. grblHAL is trapezoidal with junction deviation, so
+# every change of F is a full decelerate and accelerate - a feed tracking the
+# hand continuously puts a different F on every block and none of them chain.
+for step in (0.5, 1.0):
+    feeds = steady_turn(step, 0.95)
+    changes = sum(1 for a, b in zip(feeds, feeds[1:]) if a != b)
+    check("{0} mm holds its F word through hand wobble".format(step),
+          changes <= len(feeds) // 20, True)
+
+# The ceiling is never rounded through. Rounding to nearest can lift a feed
+# past it, and this is the fight the sender could not win from outside: it had
+# to snap up onto the grid, discover it had passed a ceiling it did not own,
+# and snap back down - which reintroduced the off-grid values the grid existed
+# to remove.
+for step in (0.1, 0.5, 1.0):
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    check("{0} mm never commands above its ceiling".format(step),
+          max(steady_turn(step, 1.4)) <= ceiling, True)
+
+# And the top grid value is reachable, which the rise band exists to protect:
+# the highest value on the grid *is* the ceiling, so getting there needs the
+# request within half a grid step of full wheel speed.
+for step in (0.5, 1.0):
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    check("  and {0} mm can still reach it".format(step),
+          max(steady_turn(step, 1.05)) == ceiling, True)
+
+# The floor is not quantised. It is already a constant, which is the whole of
+# what the grid is for, and rounding 300 up to 500 at 0.5 mm would be the
+# ceiling mistake at the other end - a bound the grid does not own being
+# rounded through. The sender floored at a whole grid step because from outside
+# it could not ask what the floor was.
+_, probe = new_scheduler()
+probe.set_step_index(STEP_SIZES.index(0.5))
+check("a deliberate single click stays at the floor, not the grid",
+      first_feed(1), probe.feed_floor())
+
+# Falling out of the band is deliberately harder than rising. A commanded feed
+# dropping below what the hand is supplying is what starves the planner, and a
+# starve is felt as the jerk to zero and back.
+check("the fall band is wider than the rise band",
+      FEED_FALL_BAND_STEPS > FEED_RISE_BAND_STEPS, True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.

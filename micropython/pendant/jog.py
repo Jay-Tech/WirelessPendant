@@ -317,6 +317,51 @@ AXIS_MAX_FEED = {"X": 15000.0, "Y": 15000.0, "Z": 6000.0, "A": 6000.0}
 # has to absorb what survives it.
 FEED_DEADBAND = 0.10
 
+# --- the feed grid --------------------------------------------------------
+#
+# Feed is snapped onto a grid, in mm/min per mm of step, so consecutive blocks
+# carry the same F word wherever the wheel is turned steadily.
+#
+# grblHAL is trapezoidal with junction deviation - no S-curve, no jerk limiting
+# - so every change of F is a full decelerate and accelerate with instantaneous
+# jerk at each end. A feed that tracks the hand continuously therefore puts a
+# different F on every block and the planner can chain none of them. Holding
+# the number still is worth more than tracking the hand exactly.
+#
+# This lived in the sender until now, as four configuration knobs, and moving
+# it here is the point rather than a tidy-up. The pendant throttles its own
+# emission against the feed it believes it commanded; while the sender was the
+# one quantising, that belief was wrong by up to a whole grid step, so the
+# budget in tick() was computed against a feed the machine never received. Two
+# places deciding one number, each compensating for the other - and every
+# session spent moving a knob at one end to correct the other end.
+#
+# Scaled by the step, not flat. Feed is turn_rate x step x 60, so identical
+# hand wobble moves the feed twice as far at 1 mm as at 0.5: a flat grid is
+# right at one step and wrong at every other, while a scaled one is a fixed
+# amount of *wheel* everywhere.
+#
+# 1000 per mm puts the grid on 1000 at the 1 mm step, 500 at 0.5 and 100 at
+# 0.1 - and every STEP_MAX_FEED is an exact multiple of its own grid (8000/1000,
+# 6000/500, 2500/100). That is what lets the snap round to nearest without ever
+# rounding through the ceiling, which is the fight the sender could not win from
+# outside: it had to round up onto the grid, discover it had passed a ceiling it
+# did not own, and round back down.
+FEED_QUANTUM_PER_MM = 1000.0
+
+# Hysteresis, in grid steps, either side of the held value.
+#
+# Asymmetric on purpose. Rising narrow so the top of a step's range stays
+# reachable - the highest grid value *is* the ceiling, so reaching it needs the
+# request within half a step of maximum wheel speed. Falling wide because a
+# fall is the expensive direction: the commanded feed dropping below what the
+# hand is supplying is precisely what starves the planner, and a starve is felt
+# as the jerk to zero and back. Feed steadiness and starve-freedom trade
+# directly against each other here, and 3.0 was measured too wide before 1.5
+# settled it.
+FEED_RISE_BAND_STEPS = 0.5
+FEED_FALL_BAND_STEPS = 1.5
+
 # Ceiling per step size, matching STEP_SIZES.
 #
 # The fine values are measured on the machine rather than derived - they came
@@ -712,6 +757,45 @@ class JogScheduler:
         floor = self.step * 60000.0 / MIN_FEED_BLOCK_MS
         return floor if floor > FEED_MIN_MM_MIN else FEED_MIN_MM_MIN
 
+    def _snap(self, feed, ceiling):
+        """The feed on this step's grid. See FEED_QUANTUM_PER_MM.
+
+        Rounded to nearest, not down: a feed under half a grid step still has
+        to carry the distance in its block, and rounding it away would leave
+        the whole bottom of the range off the grid entirely - which is a real
+        gap rather than an edge case, and is part of why a coarse grid behaved
+        worse than a fine one rather than merely coarser.
+
+        Bounded by the step's own floor and ceiling rather than by the grid.
+        The sender's version floored at one whole grid step, because from
+        outside it had no way to ask what the floor was and a rounded-down zero
+        is a rejected line rather than a slow move. Here the floor is known, so
+        a deliberate single click stays the deliberate 300 mm/min the step asks
+        for instead of being lifted to 500 by a grid that exists for a
+        different purpose. Constant is what the planner needs, and the floor is
+        every bit as constant as a grid value.
+        """
+        quantum = FEED_QUANTUM_PER_MM * self.step
+        if quantum <= 0 or feed <= 0:
+            return feed
+        # At or under the floor there is nothing to quantise. The floor is
+        # already a constant, which is the whole of what the grid is for, and
+        # rounding 300 up to 500 because the grid says so is the ceiling
+        # mistake at the other end of the range - a bound the grid does not own
+        # being rounded through.
+        floor = self.feed_floor()
+        if feed <= floor:
+            return floor if floor <= ceiling else ceiling
+
+        snapped = int(feed / quantum + 0.5) * quantum
+        if snapped < floor:
+            snapped = floor
+        # Last, and absolute. The ceiling is the firmware's own decision about
+        # what a step is for, and nothing here may round through it.
+        if snapped > ceiling:
+            snapped = ceiling
+        return snapped
+
     def feed_rate(self, detents):
         """Feed in mm/min that matches the current winding speed.
 
@@ -769,7 +853,13 @@ class JogScheduler:
         # the moment the operator starts turning. Smoothing exists to damp
         # jitter during a turn, not to soften its start.
         if not self._moving:
-            return target
+            # Snapped even at a standing start, so a burst opens on the same
+            # grid it will hold. Recorded as the settled value too - the band
+            # below has to measure from something real, and leaving it stale
+            # meant the first comparison of every burst was against the value
+            # the last one ended on.
+            self._settled = self._snap(target, ceiling)
+            return self._settled
 
         # Hold unless the target has left the band; otherwise take it exactly.
         #
@@ -779,10 +869,18 @@ class JogScheduler:
         # the gap alternately clears and fails the band - a perfect two-cycle
         # that put a different feed on every message and stopped grblHAL
         # blending any of them.
-        if abs(target - self._settled) < self._settled * FEED_DEADBAND:
+        # The band is measured in grid steps rather than as a percentage of
+        # the held value. A relative band is a different amount of wheel at
+        # every feed - widest exactly where the grid is already coarsest - and
+        # it cannot be asymmetric, because rising and falling out of a
+        # proportional band are the same distance by construction.
+        quantum = FEED_QUANTUM_PER_MM * self.step
+        band = (FEED_RISE_BAND_STEPS if target > self._settled
+                else FEED_FALL_BAND_STEPS)
+        if band > 0 and abs(target - self._settled) < quantum * band:
             settled = self._settled
         else:
-            settled = target
+            settled = self._snap(target, ceiling)
         self._settled = settled
 
         # A queue-model trim used to sit here, shading the feed 5% below the
