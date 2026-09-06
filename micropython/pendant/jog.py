@@ -358,6 +358,24 @@ RATE_WINDOW_TICKS = max(4, 400 // TICK_MS)
 # to ease off and hold top speed, and worth keeping.
 RATE_ATTACK_TICKS = 5
 
+# How far above the long window the short one must read before it is believed.
+#
+# Without this the short window cannot tell a hand winding on from a hand
+# holding a speed unsteadily, and at a steady mid-range turn it tracked every
+# wobble and won the comparison every time - turning hand jitter straight into
+# feed changes. Measured at the machine: half-speed bursts went from 4-5% of
+# blocks changing feed to 13-18%, with the planner never holding more than three
+# blocks, felt as brief stops part way through a move. The top end was untouched
+# because a hand pinned against the step's ceiling has nothing left to jitter
+# into.
+#
+# Magnitude separates the two cleanly. Winding on from rest, the short window
+# reads most of the way to the new speed while the long one still holds the
+# ramp - a ratio well over one. Holding a speed unsteadily, the two agree within
+# a few percent. So the short window is only allowed to win when it disagrees by
+# more than a hand's ordinary unsteadiness.
+RATE_ATTACK_MARGIN = 1.3
+
 # Per-tick trace, for catching a stall in the act.
 # Ticks without a detent before the wheel counts as no longer driving. Short,
 # because its only job is to tell a wind-down from a stall: two ticks of
@@ -561,7 +579,7 @@ class JogScheduler:
                 attack_total += abs(value)
             attack_seconds = RATE_ATTACK_TICKS * TICK_MS / 1000.0
             attack = (attack_total / COUNTS_PER_DETENT) / attack_seconds
-            if attack > rate:
+            if attack > rate * RATE_ATTACK_MARGIN:
                 rate = attack
 
         return rate

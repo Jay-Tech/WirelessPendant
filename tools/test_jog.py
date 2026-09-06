@@ -14,7 +14,8 @@ from pendant import protocol  # noqa: E402
 from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          IDLE_TICKS_BEFORE_CANCEL, FEED_MIN_MM_MIN,
                          FEED_MAX_MM_MIN, RATE_WINDOW_TICKS, TICK_MS,
-                         RATE_ATTACK_TICKS, COUNTS_PER_DETENT,
+                         RATE_ATTACK_TICKS, RATE_ATTACK_MARGIN,
+                         COUNTS_PER_DETENT,
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
@@ -723,6 +724,23 @@ check("a wind-on is seen before the long window catches up",
       seen > slow_rate * 3, True)
 check("and is never read as faster than the hand",
       seen <= fast_rate * 1.01, True)
+
+# But an unsteady hand at a constant speed must not trip it, or the short
+# window turns ordinary wobble into feed changes - measured as half-speed
+# bursts going from 4-5% of blocks changing feed to 13-18%.
+enc3, sched3 = new_scheduler()
+sched3.set_step(STEP_SIZES[COARSE])
+STEADY = 4
+for i in range(SETTLE):
+    # Alternating 3 and 5 detents a tick: a 25% wobble either side of four,
+    # which is well inside what a hand does while holding a speed.
+    wobble = 3 if i % 2 else 5
+    enc3.move(wobble * COUNTS_PER_DETENT)
+    sched3.tick()
+
+steady_rate = STEADY / (TICK_MS / 1000.0)
+check("a wobbling hand at a steady speed does not trip the attack window",
+      sched3.turn_rate(STEADY) <= steady_rate * RATE_ATTACK_MARGIN, True)
 
 # Steady turning must be unaffected: both windows agree, so the higher of the
 # two is simply the rate.
