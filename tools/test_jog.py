@@ -30,7 +30,7 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
                          STEP_MAX_FEED, AXIS_MAX_FEED,
                          FEED_DEADBAND,
                          FEED_QUANTUM_PER_MM, FEED_RISE_BAND_STEPS,
-                         FEED_FALL_BAND_STEPS,
+                         FEED_FALL_BAND_STEPS, FEED_GRID_MIN_LEVELS,
                          PLANNER_TARGET_BLOCKS, PLANNER_FILL_RATIO,
                          RUNAHEAD_LIMIT_S, MIN_RUNAHEAD_MM,
                          MIN_FEED_BLOCK_MS)
@@ -815,12 +815,23 @@ def steady_turn(step, fraction, seconds=4.0, tick_ms=27.0, wobble=0.12,
 # Every commanded feed sits on the step's own grid. The grid scales with the
 # step because feed is turn_rate x step x 60, so the same hand wobble moves the
 # feed twice as far at 1 mm as at 0.5 - a flat grid is right at one step only.
+def quantum_for(step):
+    """The grid the scheduler actually uses at this step."""
+    _, probe = new_scheduler()
+    probe.set_step_index(STEP_SIZES.index(step))
+    return probe._quantum(STEP_MAX_FEED[STEP_SIZES.index(step)])
+
+
 off_grid = []
 for step in (0.1, 0.5, 1.0):
-    quantum = FEED_QUANTUM_PER_MM * step
+    quantum = quantum_for(step)
     for fraction in (0.45, 0.95):
         for feed in steady_turn(step, fraction):
-            if abs(feed / quantum - round(feed / quantum)) > 1e-6:
+            # To wire precision: protocol.jog rounds the feed to a decimal
+            # place, so a grid that does not divide evenly - 8000/12 at 1 mm -
+            # lands a tenth away from the exact multiple.
+            nearest = round(feed / quantum) * quantum
+            if abs(feed - nearest) > 0.05:
                 off_grid.append((step, feed))
 check("every commanded feed lands on the step's grid", off_grid, [])
 
@@ -866,6 +877,46 @@ check("a deliberate single click stays at the floor, not the grid",
 # starve is felt as the jerk to zero and back.
 check("the fall band is wider than the rise band",
       FEED_FALL_BAND_STEPS > FEED_RISE_BAND_STEPS, True)
+
+# But neither may exceed a whole grid step, and this is a property of the grid
+# rather than a preference. Leaving the band puts the target more than the
+# band's width from the held value and the snap rounds to nearest, so a band
+# wider than a step lands two values away - and the value in between can never
+# be commanded at all. At 1.5 the feed descended in double steps and sat
+# stranded a step high between them, reported from the machine as being unable
+# to hold a reduced feed at 1 mm: "only stable at the ceiling".
+check("no band exceeds one grid step, or a value becomes unreachable",
+      max(FEED_RISE_BAND_STEPS, FEED_FALL_BAND_STEPS) <= 1.0, True)
+
+# Stranded high is the starve case, not the cure for it - the condition is the
+# commanded feed exceeding what the hand supplies. Coming down off the ceiling
+# must therefore land on the very next value, not skip one.
+_, faller = new_scheduler()
+faller.set_step_index(COARSE)
+for _ in range(RATE_WINDOW_TICKS * 2):
+    faller.encoder.move(4 * 5)
+    faller.tick()
+top = faller.feed
+for _ in range(RATE_WINDOW_TICKS * 3):
+    faller.encoder.move(4 * 2)
+    faller.tick()
+step_size = quantum_for(STEP_SIZES[COARSE])
+check("a slowdown steps down the grid rather than skipping a value",
+      abs((top - faller.feed) - step_size) < 1.0
+      or faller.feed <= 100 * STEP_SIZES[COARSE] * 60 + 1, True)
+
+# The grid may never be so coarse that a step has fewer values than 0.5 mm,
+# which is the step that behaves. 1 mm scaled purely by step had eight against
+# twelve, each one 21% of a mid-range feed - very little between most of the
+# way up and the top.
+for step in STEP_SIZES:
+    ceiling = STEP_MAX_FEED[STEP_SIZES.index(step)]
+    levels = ceiling / quantum_for(step)
+    check("{0} mm has at least {1} grid values".format(
+        step, FEED_GRID_MIN_LEVELS), levels >= FEED_GRID_MIN_LEVELS - 1e-9, True)
+    # And the top one is the ceiling itself, which is what makes it reachable.
+    check("  and its top value is exactly the ceiling",
+          abs(levels - round(levels)) < 1e-9, True)
 
 # Without a Bf: figure there is no ground truth, so the old modelled behaviour
 # has to survive - a controller with the buffer-state bit off still has to jog.

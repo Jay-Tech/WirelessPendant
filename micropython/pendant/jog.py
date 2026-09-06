@@ -349,18 +349,56 @@ FEED_DEADBAND = 0.10
 # did not own, and round back down.
 FEED_QUANTUM_PER_MM = 1000.0
 
+# Floor on how many grid values a step gets below its own ceiling.
+#
+# Scaling the grid by the step is right in *wheel* terms - it makes the band a
+# fixed number of detents per second at every step - but the ceilings are not
+# proportional to the step. 1 mm tops out at 8000 and 0.5 mm at 6000, a ratio
+# of 1.33 where the step ratio is 2, so a grid scaled purely by step comes out
+# proportionally twice as coarse at 1 mm: eight values below the ceiling
+# against twelve, each one 21% of a mid-range feed against 14%.
+#
+# Reported as being unable to hold a reduced feed at 1 mm while 0.5 mm was
+# fine - "only stable at the ceiling". With eight values there is very little
+# between "most of the way up" and the top, and the fall band spans nearly two
+# of them.
+#
+# Twelve is not a new number: it is what 0.5 mm already has, which is the step
+# that behaves. Taking it as a floor rather than a target leaves every step
+# whose grid is already finer completely untouched - only 1 mm moves, from a
+# 1000 grid to 8000/12 - and it keeps the top grid value exactly on the
+# ceiling at every step, which is what makes the top reachable at all.
+FEED_GRID_MIN_LEVELS = 12
+
 # Hysteresis, in grid steps, either side of the held value.
 #
 # Asymmetric on purpose. Rising narrow so the top of a step's range stays
 # reachable - the highest grid value *is* the ceiling, so reaching it needs the
-# request within half a step of maximum wheel speed. Falling wide because a
-# fall is the expensive direction: the commanded feed dropping below what the
-# hand is supplying is precisely what starves the planner, and a starve is felt
-# as the jerk to zero and back. Feed steadiness and starve-freedom trade
-# directly against each other here, and 3.0 was measured too wide before 1.5
-# settled it.
+# request within half a step of maximum wheel speed. Falling wider because a
+# fall is the direction that costs: dropping the commanded feed below what the
+# hand is supplying is what starves the planner, and a starve is felt as the
+# jerk to zero and back.
+#
+# Neither may exceed one whole grid step, and that is a property of the grid
+# rather than a tuning preference. Leaving the band puts the target more than
+# the band's width from the held value, and the snap then rounds to *nearest* -
+# so a band wider than a grid step lands two values away and the one in between
+# can never be commanded at all. At 1.5 the feed descended in double steps and
+# sat stranded a step high in between, which is the "only stable at the
+# ceiling" report: from the top it could reach neither the value below nor,
+# usually, the two-step drop that was the only alternative.
+#
+# A feed stranded high is also the starve case, not the cure for it. The
+# commanded feed exceeding what the hand supplies is precisely the condition,
+# so widening this band past a grid step buys the fault it was widened to
+# avoid. 3.0 and 1.5 were both measured before the grid lived here, against a
+# continuous feed where "one grid step" had no meaning at this end.
+#
+# 1.0 makes a fall move exactly one grid value, as a rise already does. Steps
+# out and back cost F changes, and there is room: hardware bursts measured 1 to
+# 17 changes in 172 to 351 blocks.
 FEED_RISE_BAND_STEPS = 0.5
-FEED_FALL_BAND_STEPS = 1.5
+FEED_FALL_BAND_STEPS = 1.0
 
 # Ceiling per step size, matching STEP_SIZES.
 #
@@ -757,6 +795,14 @@ class JogScheduler:
         floor = self.step * 60000.0 / MIN_FEED_BLOCK_MS
         return floor if floor > FEED_MIN_MM_MIN else FEED_MIN_MM_MIN
 
+    def _quantum(self, ceiling):
+        """Grid spacing for the current step. See FEED_QUANTUM_PER_MM."""
+        quantum = FEED_QUANTUM_PER_MM * self.step
+        # Never so coarse that the step has fewer values than 0.5 mm, which is
+        # the step that behaves. Only 1 mm is bound by this.
+        coarsest = ceiling / FEED_GRID_MIN_LEVELS
+        return coarsest if quantum > coarsest else quantum
+
     def _snap(self, feed, ceiling):
         """The feed on this step's grid. See FEED_QUANTUM_PER_MM.
 
@@ -775,7 +821,7 @@ class JogScheduler:
         different purpose. Constant is what the planner needs, and the floor is
         every bit as constant as a grid value.
         """
-        quantum = FEED_QUANTUM_PER_MM * self.step
+        quantum = self._quantum(ceiling)
         if quantum <= 0 or feed <= 0:
             return feed
         # At or under the floor there is nothing to quantise. The floor is
@@ -788,6 +834,13 @@ class JogScheduler:
             return floor if floor <= ceiling else ceiling
 
         snapped = int(feed / quantum + 0.5) * quantum
+        # To the precision the wire carries. protocol.jog rounds the feed to a
+        # decimal place, so without this the scheduler holds 3333.33 while the
+        # machine is told 3333.3 - and the emission budget, the drain estimate
+        # and the hysteresis all work from the number that was not sent. It is
+        # a tenth of a mm/min rather than anything measurable, but it is the
+        # same class of disagreement this whole change exists to remove.
+        snapped = round(snapped, 1)
         if snapped < floor:
             snapped = floor
         # Last, and absolute. The ceiling is the firmware's own decision about
@@ -874,7 +927,7 @@ class JogScheduler:
         # every feed - widest exactly where the grid is already coarsest - and
         # it cannot be asymmetric, because rising and falling out of a
         # proportional band are the same distance by construction.
-        quantum = FEED_QUANTUM_PER_MM * self.step
+        quantum = self._quantum(ceiling)
         band = (FEED_RISE_BAND_STEPS if target > self._settled
                 else FEED_FALL_BAND_STEPS)
         if band > 0 and abs(target - self._settled) < quantum * band:
