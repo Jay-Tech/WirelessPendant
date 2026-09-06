@@ -8,6 +8,16 @@ import types
 from pathlib import Path
 
 sys.modules.setdefault("machine", types.ModuleType("machine"))
+
+# MicroPython's monotonic tick helpers, which the scheduler uses to measure how
+# long a tick really takes. The deltas between calls here are microseconds, far
+# below TICK_MS, so the measurement's own guard rejects them and the nominal
+# period stands - which is what keeps every timing expectation below valid.
+import time  # noqa: E402
+
+time.ticks_ms = lambda: int(time.monotonic() * 1000)
+time.ticks_add = lambda t, d: t + d
+time.ticks_diff = lambda a, b: a - b
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "micropython"))
 
 from pendant import protocol  # noqa: E402
@@ -26,6 +36,9 @@ from pendant.jog import (JogScheduler, STEP_SIZES,  # noqa: E402
 # test at a different step size.
 COARSE = STEP_SIZES.index(1.0)
 FINE = STEP_SIZES.index(0.01)
+# Between the two, for cases that need room under the ceiling or finer
+# granularity than whole detents at a coarse step can give.
+MID = STEP_SIZES.index(0.1)
 
 # Long enough for the rate window to fill, so these measure the settled feed
 # rather than the transient at the start of a burst.
@@ -260,9 +273,14 @@ print("\nfeed steadiness")
 # what identified this. Smoothing does not help: it changes how fast the feed
 # moves, not how often. A steady hand must produce a steady F, jitter and all.
 enc, sched = new_scheduler()
-sched.set_step_index(COARSE)                    # headroom below the ceiling, so
+sched.set_step_index(MID)                       # headroom below the ceiling, so
                                                 # this tests the feed logic and
-                                                # not the cap
+                                                # not the cap. The coarse step
+                                                # no longer has any: this wobble
+                                                # is ~150 detents/s, which at
+                                                # 1 mm asks 9000 against a
+                                                # ceiling of 8000, so every
+                                                # sample would be the cap.
 feeds = []
 wobble = (3, 3, 4, 3, 2, 3, 4, 3, 3, 2, 3, 4)   # a real hand is not metronomic
 for _ in range(8):
@@ -602,8 +620,12 @@ def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE,
     case here assumed before the recovery path began regulating against it.
     """
     enc, sched = new_scheduler()
-    for _ in range(step_index):
-        sched.step_up()
+    # Set, not stepped. This walked step_up() step_index times from whatever the
+    # scheduler starts on - which is 0.1 mm, not the finest - so the argument
+    # was a repeat count wearing an index's name. COARSE worked only because
+    # four step-ups saturate the ladder anyway, and every other value landed on
+    # 1 mm too.
+    sched.set_step_index(step_index)
     sched.planner_capacity = CAPACITY
     sched.planner_free = free
     sent = 0
@@ -619,8 +641,15 @@ def run_at_depth(free, ticks=SETTLE, detents_per_tick=40, step_index=COARSE,
 # Shallow: the pendant must send more than the machine drains, or depth can
 # never build. This is the case that was broken - emission exactly matched the
 # drain, so the planner sat two to four blocks deep and any stall emptied it.
-starved, sent_starved = run_at_depth(CAPACITY)
-supplied, sent_supplied = run_at_depth(CAPACITY - PLANNER_TARGET_BLOCKS)
+# Measured at MID rather than COARSE, because emission is a whole number of
+# detents per tick and at a coarse step that number is small: the 1 mm ceiling
+# gives (8000/60) x 20 ms / 1 mm = 2.7, so rounding moves the measured ratio by
+# a fifth either way and the reading says more about truncation than about the
+# fill. A finer step makes the same quantity ~8 detents, where rounding is
+# noise. The behaviour under test is identical; only the resolution changes.
+starved, sent_starved = run_at_depth(CAPACITY, step_index=MID)
+supplied, sent_supplied = run_at_depth(CAPACITY - PLANNER_TARGET_BLOCKS,
+                                       step_index=MID)
 check("an empty planner is fed faster than it drains", sent_starved > sent_supplied, True)
 # Not the exact ratio: a tick carries a whole number of detents, so the cap
 # truncates, and the older build trim still shades the feed while the queue
@@ -635,7 +664,8 @@ check("  and a supplied one is fed at the drain rate",
 # whenever the planner is shallow, and at a coarse step the planner is
 # permanently shallow - so it never stops, and the surplus becomes lag rather
 # than depth. The machine measured 96 mm behind the hand before this bound.
-starved_far_behind, sent_far = run_at_depth(CAPACITY, lag_mm=10000.0)
+starved_far_behind, sent_far = run_at_depth(CAPACITY, lag_mm=10000.0,
+                                            step_index=MID)
 check("run-ahead past the limit stops the fill",
       sent_far <= sent_supplied, True)
 
@@ -752,6 +782,64 @@ for _ in range(SETTLE):
 
 check("a steady turn reads the same as before",
       sched2.turn_rate(FAST_PER_TICK), fast_rate, tol=fast_rate * 0.02)
+
+
+print("measured tick period")
+
+# TICK_MS is the sleep at the end of the loop, not the period of it: run() does
+# its work and *then* sleeps, so the real interval is the work plus TICK_MS.
+# Measured on the board at about 27 ms against a nominal 20 - the pendant sent
+# ~37 messages a second where 50 was intended, in every burst of every session.
+#
+# Taking the nominal figure as the period made every rate estimate 35% high, so
+# the machine was commanded a third faster than the hand was turning, drained
+# its own buffer and stopped. That was the jerk to zero.
+
+REAL_TICK_MS = 27
+PER_TICK = 4
+
+_clock = [0]
+_real_ticks_ms = time.ticks_ms
+time.ticks_ms = lambda: _clock[0]
+
+enc4, sched4 = new_scheduler()
+sched4.set_step(STEP_SIZES[COARSE])
+
+for _ in range(300):
+    _clock[0] += REAL_TICK_MS
+    enc4.move(PER_TICK * COUNTS_PER_DETENT)
+    sched4.tick()
+
+check("a slow tick is measured rather than assumed",
+      abs(sched4._tick_ms - REAL_TICK_MS) < 1.0, True)
+
+true_rate = PER_TICK / (REAL_TICK_MS / 1000.0)
+nominal_rate = PER_TICK / (TICK_MS / 1000.0)
+seen = sched4.turn_rate(PER_TICK)
+
+check("the rate follows real elapsed time",
+      abs(seen - true_rate) < true_rate * 0.05, True)
+check("and not the nominal tick, which read 35% high",
+      seen < nominal_rate * 0.85, True)
+
+# The detent budget has to move with it. It is derived from the feed times the
+# tick, so the two errors used to cancel - a rate 35% high multiplied by a tick
+# 35% short came out roughly right. Correcting only one would have started
+# discarding a quarter of the operator's wheel motion.
+budget_ratio = sched4._tick_ms / TICK_MS
+check("the detent budget uses the same measured tick",
+      budget_ratio > 1.25, True)
+
+# A stall is real elapsed time but it is not the period; folding one in would
+# move the estimate for the rest of the burst.
+before = sched4._tick_ms
+_clock[0] += 500
+enc4.move(PER_TICK * COUNTS_PER_DETENT)
+sched4.tick()
+check("a loop stall does not move the measurement",
+      abs(sched4._tick_ms - before) < 0.01, True)
+
+time.ticks_ms = _real_ticks_ms
 
 
 if failures:

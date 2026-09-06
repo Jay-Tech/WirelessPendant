@@ -15,6 +15,8 @@ mid-motion, so a partially executed jog on the old axis does not continue after
 the operator has moved on.
 """
 
+import time
+
 try:
     import protocol
 except ImportError:
@@ -326,12 +328,6 @@ FEED_DEADBAND = 0.10
 #
 # 1 mm stays at 10000. Nobody has reported it as hard to reach or hold, and
 # traversing the length of the table is what it is for.
-#
-# What this does not change is the precision the top of a step needs. The
-# sender snaps the commanded feed to a grid whose highest value is this ceiling,
-# so reaching it means landing within half a grid step of maximum wheel speed -
-# about 3% either way, at any ceiling. Lowering this makes that 3% cheaper to
-# sit at; it does not make it wider. See JogFeedQuantumMmPerMin in the sender.
 STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 10000.0)
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
@@ -388,6 +384,11 @@ RATE_ATTACK_TICKS = 5
 # a few percent. So the short window is only allowed to win when it disagrees by
 # more than a hand's ordinary unsteadiness.
 RATE_ATTACK_MARGIN = 1.3
+
+# How quickly the measured tick period follows a change. Slow, because it is a
+# property of the board and its workload rather than of the operator - it
+# should settle once and stay there, not chase individual ticks.
+TICK_MEASURE_ALPHA = 0.05
 
 # Per-tick trace, for catching a stall in the act.
 # Ticks without a detent before the wheel counts as no longer driving. Short,
@@ -463,6 +464,31 @@ class JogScheduler:
         self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
 
+        # How long a tick actually takes, measured rather than assumed.
+        #
+        # TICK_MS is the sleep at the end of the loop, not the period of it -
+        # run() does its work and *then* sleeps, so the real interval is the
+        # work plus TICK_MS. Measured on the machine at about 27 ms against a
+        # nominal 20: the pendant sends ~37 messages a second where 50 was
+        # intended, consistently, in every burst of every session.
+        #
+        # Using the nominal figure as the period made every rate estimate 35%
+        # high - 4.8 detents in a tick read as 240 detents/s where the truth was
+        # 178 - so the machine was commanded a third faster than the hand was
+        # turning. It drained its own buffer and stopped, which is the jerk to
+        # zero that dominated a day of testing.
+        #
+        # The error was invisible at the top of a step's range, because the
+        # ceiling clamped the inflated request back to something achievable.
+        # That is why full speed felt smooth while the middle did not, and why
+        # the smooth spot sat exactly where the ceiling started binding.
+        #
+        # Smoothed, and outliers ignored: a loop stall is real elapsed time but
+        # it is not the period, and folding one in would move the estimate for
+        # the rest of the burst.
+        self._tick_ms = float(TICK_MS)
+        self._last_tick_ms = None
+
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
         # three separate explanations for these stalls have now failed to
@@ -533,6 +559,17 @@ class JogScheduler:
 
     # --- per tick ---------------------------------------------------------
 
+    def _measure_tick(self):
+        """Track how long a tick is really taking. See _tick_ms."""
+        now = time.ticks_ms()
+        if self._last_tick_ms is not None:
+            delta = time.ticks_diff(now, self._last_tick_ms)
+            # A plausible tick only. Below the sleep is impossible, and far
+            # above it is a stall rather than the period.
+            if TICK_MS <= delta <= TICK_MS * 4:
+                self._tick_ms += (delta - self._tick_ms) * TICK_MEASURE_ALPHA
+        self._last_tick_ms = now
+
     def turn_rate(self, detents=0):
         """Detents per second.
 
@@ -563,14 +600,14 @@ class JogScheduler:
 
         if not self._moving:
             if abs(detents) > 1:
-                return abs(detents) / (TICK_MS / 1000.0)
+                return abs(detents) / (self._tick_ms / 1000.0)
             # A lone detent says only that one arrived somewhere in the gap, so
             # the gap is the best estimate - and a deliberate single click for
             # fine positioning stays slow, which is the point.
             ticks = self._ticks_since_motion
             if ticks < 1:
                 ticks = 1
-            return abs(detents) / (ticks * TICK_MS / 1000.0)
+            return abs(detents) / (ticks * self._tick_ms / 1000.0)
 
         total = 0
         for value in self._recent:
@@ -580,7 +617,7 @@ class JogScheduler:
         # a rate lower than the hand is really turning, so the feed dips just
         # after a strong start.
         samples = len(self._recent) or 1
-        seconds = samples * TICK_MS / 1000.0
+        seconds = samples * self._tick_ms / 1000.0
         rate = (total / COUNTS_PER_DETENT) / seconds
 
         # And the same measurement over the last few ticks, which is what
@@ -590,7 +627,7 @@ class JogScheduler:
             attack_total = 0
             for value in self._recent[-RATE_ATTACK_TICKS:]:
                 attack_total += abs(value)
-            attack_seconds = RATE_ATTACK_TICKS * TICK_MS / 1000.0
+            attack_seconds = RATE_ATTACK_TICKS * self._tick_ms / 1000.0
             attack = (attack_total / COUNTS_PER_DETENT) / attack_seconds
             if attack > rate * RATE_ATTACK_MARGIN:
                 rate = attack
@@ -716,11 +753,12 @@ class JogScheduler:
     def tick(self):
         """Advance one interval. Returns a message to send, or None."""
         counts = self.encoder.take()
+        self._measure_tick()
 
         # Drain the in-flight estimate by what the machine executes in a tick at
         # the feed last commanded. Done every tick, including idle ones, so the
         # queue empties while the wheel is still.
-        drained = (self.feed / 60.0) * (TICK_MS / 1000.0)
+        drained = (self.feed / 60.0) * (self._tick_ms / 1000.0)
         self._queue_mm -= drained
         if self._queue_mm < 0:
             self._queue_mm = 0.0
@@ -873,7 +911,7 @@ class JogScheduler:
             #
             # Harmless at a 50 ms tick where a detent is a few percent of the
             # message; at 20 ms the same detent is a third of it.
-            allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step + 0.5)
+            allowed = int((cap / 60.0) * (self._tick_ms / 1000.0) / self.step + 0.5)
             if allowed < 1:
                 allowed = 1
 
@@ -953,7 +991,7 @@ class JogScheduler:
         # The planner stalls when the queue runs dry, not when a single tick
         # carries less than usual - a dip the buffer absorbs is a non-event, and
         # flagging those would bury the ones that matter.
-        drain = (self.feed / 60.0) * (TICK_MS / 1000.0)
+        drain = (self.feed / 60.0) * (self._tick_ms / 1000.0)
         if self._queue_mm > drain:
             return
 
