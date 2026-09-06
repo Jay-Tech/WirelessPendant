@@ -428,7 +428,32 @@ FEED_FALL_BAND_STEPS = 0.25
 # so reaching it means landing within half a grid step of maximum wheel speed -
 # about 3% either way, at any ceiling. Lowering this makes that 3% cheaper to
 # sit at; it does not make it wider. See JogFeedQuantumMmPerMin in the sender.
-STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 8000.0)
+# 1 mm at 12000, which is 2x the 0.5 mm ceiling for 2x the step.
+#
+# Proportional to the step, and that is the whole reason for the number. Bands
+# are equal fractions of the ceiling, so the wheel speed each band needs is
+# ceiling / (step x 60) - and unless the ceilings are proportional to the step,
+# the same turn means a different band at each step. At 8000 it did:
+#
+#   0.5 mm @ 6000   bands need  50 / 100 / 150 / 200 detents/s
+#   1.0 mm @ 8000   bands need  33 /  67 / 100 / 133
+#   1.0 mm @ 12000  bands need  50 / 100 / 150 / 200
+#
+# On a 100 PPR wheel one rev/s at 1 mm therefore landed on band 3, three
+# quarters of top speed, where the same rev/s at 0.5 mm lands on band 2 and
+# half. Reported as 0.5 mm being able to hit and hold every band while 1 mm
+# could only hold the one below top, and that one wanting a turn far slower
+# than it should - "would be more inline ... to line up with 2000".
+#
+# 10000 was the suggestion and gets within 17%; 12000 is exact. X and Y can
+# deliver it - the axis maximum is 15000 - and Z still clamps to its own 6000.
+#
+# The cost is run-on at the top band, because RUNAHEAD_LIMIT_S is a time and so
+# scales with feed: the bound goes from 40 mm to 60. If that is too much, the
+# compensating change is RUNAHEAD_LIMIT_S 0.3 -> 0.2, which puts the bound back
+# at 40 mm - but change one at a time, since run-on and band spacing are
+# separate complaints and were separately measured.
+STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 12000.0)
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
