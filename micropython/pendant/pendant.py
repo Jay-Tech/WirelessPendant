@@ -451,10 +451,31 @@ def update_lag(wpos):
               and abs(wpos[index] - previous) > POSITION_JUMP_MM)
     state["lag_last_pos"] = wpos[index]
 
+    # Both ends quiescent: the wheel is not turning and the machine reports it
+    # is not moving. Whatever the position says at that moment is the truth, so
+    # the reference is taken again from it.
+    #
+    # The jump test above cannot cover this on its own, and its own comment says
+    # why without drawing the conclusion: a rapid at $110 covers 25 mm between
+    # status frames, which is *under* POSITION_JUMP_MM. So a discontinuity is
+    # caught while a G53 traverse - smooth, fast, and none of it commanded here -
+    # is read as ordinary motion, and every millimetre of it lands in the lag.
+    #
+    # Seen at the machine: a return-to-zero macro during testing put lag at
+    # 195 mm, which never decayed. The scheduler bounds its run-ahead on this,
+    # so it switched to emitting at the reported feed, the detent budget fell to
+    # one per tick, and 70% of the operator's turning was discarded for the rest
+    # of the session. Only restarting the pendant cleared it.
+    #
+    # Deliberately requires both. The wheel stopping alone is not enough - the
+    # machine is still running out what is queued, and that run-off is real lag
+    # worth keeping.
+    idle = not scheduler.moving and not state["actual_feed"]
+
     session = pendant_link.stats["sessions"] if pendant_link else 0
     reference = state["_ref"]
     if (reference is None or reference[0] != scheduler.axis
-            or session != state["lag_session"] or jumped):
+            or session != state["lag_session"] or jumped or idle):
         state["lag_session"] = session
         state["_ref"] = (scheduler.axis, wpos[index], scheduler.commanded_mm)
         # Cleared rather than left to be overwritten next frame: the scheduler
@@ -993,10 +1014,25 @@ async def report():
         if pendant_link.stats.get("worst_tx_ms"):
             tx = " tx={}/{}ms".format(pendant_link.stats.get("slow_tx", 0),
                                       pendant_link.stats["worst_tx_ms"])
+
+        # Messages the link actually put on the wire, against ticks that had
+        # something to send. Their difference is what the transport could not
+        # carry: send() folds a jog into one already queued rather than
+        # dropping it, so the motion survives but arrives as fewer, larger
+        # blocks.
+        #
+        # Worth printing because the sender cannot see it. From its side a
+        # merged stream and a slow tick look identical - both arrive at about
+        # 36 messages a second against a nominal 50 - and the two have opposite
+        # causes. Without this the only way to tell them apart is arithmetic on
+        # detent counts, which is what it took the first time.
+        link_tx = " msg={}/merged={}".format(
+            pendant_link.stats.get("sent", 0),
+            pendant_link.stats.get("merged", 0))
         link.log(
             "{} | axis {} step {} F{:.0f}/act{} collapse={} | {} | detents={}"
             " dropped={} ({}% kept) lag={:.1f}/{:.1f}mm depth={}/{} of {}"
-            " err={} sess={} stall={}/{}ms{}".format(
+            " err={} sess={} stall={}/{}ms{}{}".format(
                 "up" if pendant_link.connected else "DOWN",
                 scheduler.axis, scheduler.step, scheduler.feed,
                 state["actual_feed"], state["feed_collapses"], position,
@@ -1005,7 +1041,7 @@ async def report():
                 held, deepest, capacity,
                 encoder.errors,
                 pendant_link.stats["sessions"], state["stalls"],
-                state["worst_stall_ms"], tx))
+                state["worst_stall_ms"], tx, link_tx))
 
 
 async def main():

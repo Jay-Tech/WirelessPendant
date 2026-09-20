@@ -15,6 +15,8 @@ mid-motion, so a partially executed jog on the old axis does not continue after
 the operator has moved on.
 """
 
+import time
+
 try:
     import protocol
 except ImportError:
@@ -161,6 +163,21 @@ PLANNER_TARGET_BLOCKS = 12
 #
 # Scaling by the shortfall makes the correction fade out as the buffer fills,
 # so block length converges instead of oscillating.
+#
+# 1.4 was tried and reverted. The theory was that 2.0 outruns its own feedback -
+# depth arrives with the status frame at 10 Hz, three or four ticks apart, so a
+# fill gaining a block per tick runs blind for three or four blocks between
+# updates. It measured wrong: at 1.4 the 1 mm step still peaked at 25 blocks
+# against 26, while 0.5 mm fell from 12 blocks to 7 and became hard to get up to
+# speed. Slowing the fill cost the step that needed it and did nothing for the
+# step that overshoots.
+#
+# That was the third explanation to fail here, and the reason all three did is
+# that none of them were about this constant. The 1 mm overshoot was the
+# emission budget rounding a fractional detent up - see the cap in tick() - so
+# it was downstream of every fill setting and moved with none of them. Ruling
+# this out was still worth the runs it cost: it is what left the arithmetic as
+# the only place remaining to look.
 PLANNER_FILL_RATIO = 2.0
 
 # Hard bound on how far behind the hand the machine may run, in seconds.
@@ -195,7 +212,22 @@ PLANNER_FILL_RATIO = 2.0
 # bound set close to the real figure therefore binds well before the buffer is
 # actually that deep, which is the mistake this had already made once at a fine
 # step.
-RUNAHEAD_LIMIT_S = 0.5
+# Measured at 0.5: run-on scales with feed because this is a time, so the two
+# coarse steps ran very differently on one setting. A 1 mm step at its 10000
+# ceiling is allowed (10000/60) x 0.5 = 83 mm of lead where a 0.5 mm step at
+# 6000 gets 50 mm - and 50 mm was reported as livable while 83 was "probably too
+# much". Observed lag tracked those bounds closely: 118 mm at 1 mm against
+# 40-57 mm at 0.5 mm.
+#
+# 0.3 brings 1 mm to 50 mm, which is where 0.5 mm sits now, and takes 0.5 mm to
+# 30 mm with it. The cost is that the bound engages sooner, so emission is
+# pinned at the drain rate a little more often and a few more detents are
+# discarded above it.
+#
+# Spending this rather than the ceilings is deliberate: lowering STEP_MAX_FEED
+# would buy the same run-on back by giving up top speed, and run-on is what was
+# actually complained about.
+RUNAHEAD_LIMIT_S = 0.3
 
 
 # Floor under that bound, in millimetres.
@@ -285,41 +317,143 @@ AXIS_MAX_FEED = {"X": 15000.0, "Y": 15000.0, "Z": 6000.0, "A": 6000.0}
 # has to absorb what survives it.
 FEED_DEADBAND = 0.10
 
+# --- the feed bands -------------------------------------------------------
+#
+# Feed is one of a few fixed values per step, and it is chosen by rounding the
+# hand's rate DOWN onto them.
+#
+# grblHAL is trapezoidal with junction deviation - no S-curve, no jerk limiting
+# - so every change of F is a full decelerate and accelerate with instantaneous
+# jerk at both ends. Nothing here can smooth that, which means the only feed a
+# planner can actually hold is one that stops changing. Tracking the hand
+# continuously puts a different F on every block and chains none of them.
+#
+# This replaces a grid scaled per millimetre of step, which was itself replacing
+# four configuration knobs in the sender. The measured difference is not
+# marginal: holding a speed for 14 s with detents arriving as a hand produces
+# them, the grid changed feed 22 to 46 times per burst against 1 to 10 here.
+#
+# Rounding DOWN is the half that matters, and it is what the grid got wrong.
+# Rounded to nearest, the commanded feed sits above what the hand is supplying
+# about half the time - measured at 40 to 73% of blocks - and that is precisely
+# the starve condition: the machine cannot be fed at a rate the wheel is not
+# producing, so the planner empties and the actual feed collapses. The machine
+# showed it as F8000/act2666 holding one block. Rounding down inverts the
+# guarantee: within a band the hand always supplies at least what was asked
+# for, and the surplus is dropped by the emission cap, which is bounded. The
+# same measurement falls to 0 to 13%.
+#
+# What is given up is speed between bands - a hand at 99% of full gets the
+# band below - and that is the design rather than a cost. Discrete speeds are
+# the point: the operator picks a band by how fast they turn and it stays put.
+#
+# Four, because it beat six on both counts - fewer feed changes and less time
+# commanded above supply. The bands are equal fractions of the step's own
+# ceiling, so the top band IS the ceiling and every step has the same number of
+# them, which is what makes the steps feel alike to drive.
+FEED_BANDS = 4
+
+# Hysteresis at a band edge, as a fraction of one band.
+#
+# Small, because rounding down is already most of the hysteresis: a band has to
+# be fully crossed before anything changes. This only stops a hand sitting
+# exactly on an edge from flickering across it.
+#
+# Asymmetric the same way and for the same reason as before: rising narrow so
+# the top band stays reachable, falling wider because dropping the commanded
+# feed below what the hand supplies is the expensive direction. Neither may
+# reach a whole band, or a band becomes unreachable.
+FEED_RISE_BAND_STEPS = 0.15
+FEED_FALL_BAND_STEPS = 0.25
+
 # Ceiling per step size, matching STEP_SIZES.
 #
 # The fine values are measured on the machine rather than derived - they came
 # out roughly a third of what seemed reasonable on paper, which says a fine step
 # wants control far more than speed.
 #
-# The coarse ones now run to the machine's real limit, because anything less
-# throws away turning the operator is actually doing. Measured on the machine at
+# The coarse ones were set to the machine's real limit, on the reasoning that
+# anything less throws away turning the operator is actually doing. Measured at
 # roughly 4 rev/s - 400 detents/s - the demand is step x 400 x 60:
 #
 #   0.5 mm -> 12000 mm/min, which X and Y can deliver in full
 #   1.0 mm -> 24000 mm/min, which nothing can, so 1 mm sheds ~38% at that speed
 #
-# So 0.5 mm is the traverse step for a hand that turns this fast, and 1 mm is
-# only fully usable below about 250 detents/s. That is a property of the wheel
-# and the machine, not something a ceiling can fix.
+# From which 0.5 mm was called the traverse step for a hand that turns this
+# fast. That premise has since been tested at the machine and does not hold: a
+# hand can *reach* 400 detents/s, but sustaining the 267 a full 0.5 mm traverse
+# needs is work, and it was reported as such - "got to keep spinning fast, not
+# much room to reduce". The two coarse steps are also nothing like each other to
+# drive, because the wheel speed each ceiling demands is not the same:
 #
-# The coarse pair came down from 9000 and 12000 to buy back run-off. Once the
-# planner depth target was raised the motion went smooth, and the bill arrived
-# as coast: about 0.73 s at 1 mm and F12000, which is 133 mm of table after the
-# hand stops.
+#   1.0 mm at 10000 -> 167 detents/s to saturate
+#   0.5 mm at  8000 -> 267 detents/s, 1.6x the wheel for the finer step
 #
-# Run-off scales with speed and this is the cheapest place to spend it. Depth
-# holds twelve blocks whatever the feed, but a block is what the commanded feed
-# drains in a tick, so lowering the ceiling shortens every block with it:
+# So 0.5 mm comes down to 6000, which asks 200 detents/s - near enough to 1 mm
+# that switching step no longer changes what "full speed" costs the hand. What
+# is given up is top traverse speed at the fine step, and little is lost by it:
+# 6000 mm/min is still 236 in/min, and 1 mm is the step to reach for when the
+# job is crossing the table.
+#
+# It also buys coast, which is the same currency the last trim was paid in.
+# Depth holds twelve blocks whatever the feed, but a block is what the commanded
+# feed drains in a tick, so lowering the ceiling shortens every block with it:
 #
 #   1.0 mm at 12000 -> 4.0 mm blocks -> 52 mm of depth, 13 mm to decelerate
 #   1.0 mm at 10000 -> 3.0 mm blocks -> 36 mm of depth,  9 mm to decelerate
 #   0.5 mm at  9000 -> 3.0 mm blocks -> 36 mm of depth
 #   0.5 mm at  8000 -> 2.5 mm blocks -> 30 mm of depth
+#   0.5 mm at  6000 -> 2.0 mm blocks -> 24 mm of depth
+#   1.0 mm at  8000 -> 2.7 mm blocks -> 32 mm of depth
 #
-# Deliberately a trim rather than a cut. 12000 at 1 mm is genuinely wanted for
-# traversing the length of the table, so this keeps most of the top end and
-# takes roughly a quarter of the coast rather than halving both.
-STEP_MAX_FEED = (150.0, 250.0, 2500.0, 8000.0, 10000.0)
+# 1 mm followed it down to 8000, once the tick period was being measured rather
+# than assumed and the numbers underneath meant something. Two complaints, one
+# value:
+#
+#   - it wanted a hard fast start to reach the top. 10000 needs 167 detents/s;
+#     8000 needs 133, which is close to what 0.5 mm asks at its own ceiling.
+#   - it ran on further than 0.5 mm and was called "probably too much". Run-on
+#     is bounded as a time, so it scales with feed: at RUNAHEAD_LIMIT_S the
+#     ceiling permits (feed/60) x 0.3, which is 50 mm at 10000 and 40 at 8000.
+#     Some of the rest is not queue at all - status arrives at 10 Hz, so at
+#     167 mm/s about 17 mm of the measured lag is reporting latency, and that
+#     shrinks with the speed too.
+#
+# Tightening the run-ahead bound further was the alternative and was refused:
+# below MIN_RUNAHEAD_MM it stops filling the planner at all, which is the
+# starve this whole exercise was about, and it would have bought maybe 15 mm.
+#
+# What this does not change is the precision the top of a step needs. The
+# sender snaps the commanded feed to a grid whose highest value is this ceiling,
+# so reaching it means landing within half a grid step of maximum wheel speed -
+# about 3% either way, at any ceiling. Lowering this makes that 3% cheaper to
+# sit at; it does not make it wider. See JogFeedQuantumMmPerMin in the sender.
+# 1 mm at 12000, which is 2x the 0.5 mm ceiling for 2x the step.
+#
+# Proportional to the step, and that is the whole reason for the number. Bands
+# are equal fractions of the ceiling, so the wheel speed each band needs is
+# ceiling / (step x 60) - and unless the ceilings are proportional to the step,
+# the same turn means a different band at each step. At 8000 it did:
+#
+#   0.5 mm @ 6000   bands need  50 / 100 / 150 / 200 detents/s
+#   1.0 mm @ 8000   bands need  33 /  67 / 100 / 133
+#   1.0 mm @ 12000  bands need  50 / 100 / 150 / 200
+#
+# On a 100 PPR wheel one rev/s at 1 mm therefore landed on band 3, three
+# quarters of top speed, where the same rev/s at 0.5 mm lands on band 2 and
+# half. Reported as 0.5 mm being able to hit and hold every band while 1 mm
+# could only hold the one below top, and that one wanting a turn far slower
+# than it should - "would be more inline ... to line up with 2000".
+#
+# 10000 was the suggestion and gets within 17%; 12000 is exact. X and Y can
+# deliver it - the axis maximum is 15000 - and Z still clamps to its own 6000.
+#
+# The cost is run-on at the top band, because RUNAHEAD_LIMIT_S is a time and so
+# scales with feed: the bound goes from 40 mm to 60. If that is too much, the
+# compensating change is RUNAHEAD_LIMIT_S 0.3 -> 0.2, which puts the bound back
+# at 40 mm - but change one at a time, since run-on and band spacing are
+# separate complaints and were separately measured.
+STEP_MAX_FEED = (150.0, 250.0, 2500.0, 6000.0, 12000.0)
 
 # Rate is measured over a window rather than per tick: at 20 ms a tick sees one
 # or two detents even during a fast spin, far too coarse to estimate speed from.
@@ -338,6 +472,114 @@ STEP_MAX_FEED = (150.0, 250.0, 2500.0, 8000.0, 10000.0)
 # and a shorter window means a noisier rate estimate feeding straight into the
 # commanded feed.
 RATE_WINDOW_TICKS = max(4, 400 // TICK_MS)
+
+# A shorter window taken alongside the long one, with the higher winning. Zero
+# disables it and leaves the plain average.
+#
+# The long window is a trailing average, and a trailing average lags a hand that
+# is speeding up. Wind from rest to 200 detents/s over 400 ms and at the end of
+# it the window still holds the whole ramp, so it reports about half the speed
+# actually being turned - which means reaching the step's ceiling requires not
+# merely arriving at that speed but holding it until the window refills.
+#
+# Felt at the machine as a dead stop being hard to accelerate away from, while
+# the same top speed came easily by turning slowly first and then winding on:
+# priming leaves the window already full of moving samples, so an increase reads
+# at once. The speed was never the difficulty; which samples the window held was.
+#
+# Taking the higher of the two only ever raises the feed, so a wind-down still
+# decays at the long window's pace - which is the behaviour that makes it easy
+# to ease off and hold top speed, and worth keeping.
+RATE_ATTACK_TICKS = 5
+
+# Consecutive ticks the short window must win before it is believed, which
+# must be MORE than the window is long.
+#
+# Without persistence the comparison is decided tick by tick, and detents do
+# not arrive evenly - a hand is a Poisson-ish source, so a five-tick window
+# clumps well above its own mean as a matter of course. Measured with Poisson
+# arrivals: a steady hand asking 4800 mm/min at 1 mm was commanded a median
+# 5333 and spiked to the 8000 ceiling on 6% of blocks; asking 3200 it still
+# reached 8000. Reported from the machine in exactly those terms - "1 mm just
+# always searches until clamped at 8000" - and reaching the ceiling at a turn
+# far slower than should be needed.
+#
+# The feed then sits above what the hand supplies, which is the starve
+# condition: the machine cannot be fed at a rate the wheel is not producing, so
+# the planner empties and the *actual* feed collapses. The machine showed
+# F8000/act2666 holding one block.
+#
+# Exceeding the window length is the whole point, and three was tried first and
+# was not enough. Consecutive ticks are not independent evidence: they are
+# computed from windows that overlap, so one clump satisfies "three in a row"
+# on its own merely by sitting in the window for three of the five ticks it
+# occupies. Only once the window has fully turned over are the detents being
+# judged new ones - so the hold has to outlast the window, and at six a clump
+# has aged out before the count can reach it.
+#
+# Measured across both coarse steps and both a slow and a brisk hold, six
+# removes every excursion to a ceiling that three left in place. It costs
+# 7 ticks against 4 on a genuine mid-turn wind-on - 196 ms against 112 - where
+# the long window on its own takes around 400.
+RATE_ATTACK_HOLD_TICKS = RATE_ATTACK_TICKS + 1
+
+# How far above the long window the short one must read before it is believed.
+#
+# Without this the short window cannot tell a hand winding on from a hand
+# holding a speed unsteadily, and at a steady mid-range turn it tracked every
+# wobble and won the comparison every time - turning hand jitter straight into
+# feed changes. Measured at the machine: half-speed bursts went from 4-5% of
+# blocks changing feed to 13-18%, with the planner never holding more than three
+# blocks, felt as brief stops part way through a move. The top end was untouched
+# because a hand pinned against the step's ceiling has nothing left to jitter
+# into.
+#
+# Magnitude separates the two cleanly. Winding on from rest, the short window
+# reads most of the way to the new speed while the long one still holds the
+# ramp - a ratio well over one. Holding a speed unsteadily, the two agree within
+# a few percent. So the short window is only allowed to win when it disagrees by
+# more than a hand's ordinary unsteadiness.
+# Raised from 1.3 with the hold above. Detents arrive unevenly, so the spread
+# of a five-tick window is around 30% of its own mean at a normal turn - which
+# made 1.3 about one standard deviation, and noise alone cleared it constantly.
+# Persistence alone was not enough: three consecutive clumps are uncommon but a
+# single one keeps the window hot for its whole five ticks, and that was still
+# reaching the ceiling on 4% of blocks.
+#
+# 1.6 with a hold of 3 measures identically to switching the attack window off
+# altogether - a steady 4800 mm/min hand at 1 mm commanded a median 4667 and
+# peaked at 6667 either way - while still seeing a mid-turn wind-on in 4 ticks,
+# which is what the window is for. The noise immunity of not having it, and the
+# response of having it.
+RATE_ATTACK_MARGIN = 1.6
+
+# How many of the attack window's own standard deviations it must lead by.
+#
+# A fixed margin cannot work, and 1.6 failing at one speed while holding at
+# another is what showed it. Detents arrive as counts, so the spread of a
+# window is set by how many it holds: at 1 mm a five-tick window carries 11
+# detents at 4800 mm/min and 7.5 at 3200, which is a 30% spread against 37%.
+# One fixed number is therefore several different confidence levels depending
+# on where the wheel happens to be - and the slower the turn, the weaker it
+# gets, which is backwards. 3200 still reached the ceiling on a margin that
+# held 4800 comfortably.
+#
+# Counting in standard deviations makes the test say the same thing everywhere:
+# believe the short window only when it leads by more than its own noise could
+# account for. For a count the spread is 1/sqrt(N), so the bar rises on its own
+# exactly when the evidence thins - which also carries it across the step
+# ladder, where a window at 0.001 mm holds a small fraction of what one at 1 mm
+# does.
+# Two rather than three. With the hold outlasting the window there is already
+# a strong independence test in front of this, so the bar here can be the
+# weaker of the two: three sigmas removed nothing further that six ticks had
+# not already removed, and stretched a real wind-on from 7 ticks to 17.
+RATE_ATTACK_SIGMAS = 2.0
+
+# How quickly the measured tick period follows a change. Slow, because it is a
+# property of the board and its workload rather than of the operator - it
+# should settle once and stay there, not chase individual ticks.
+TICK_MEASURE_ALPHA = 0.05
 
 # Per-tick trace, for catching a stall in the act.
 # Ticks without a detent before the wheel counts as no longer driving. Short,
@@ -412,6 +654,33 @@ class JogScheduler:
         self.planner_capacity = 0     # largest free count seen = empty planner
         self.dumps = 0                # full tables printed, against the budget
         self.lag_mm = 0.0             # measured, pushed in from the status feed
+        self._attack_ticks = 0        # consecutive wins by the short window
+        self._allow_mm = 0.0          # unspent emission budget, carried
+
+        # How long a tick actually takes, measured rather than assumed.
+        #
+        # TICK_MS is the sleep at the end of the loop, not the period of it -
+        # run() does its work and *then* sleeps, so the real interval is the
+        # work plus TICK_MS. Measured on the machine at about 27 ms against a
+        # nominal 20: the pendant sends ~37 messages a second where 50 was
+        # intended, consistently, in every burst of every session.
+        #
+        # Using the nominal figure as the period made every rate estimate 35%
+        # high - 4.8 detents in a tick read as 240 detents/s where the truth was
+        # 178 - so the machine was commanded a third faster than the hand was
+        # turning. It drained its own buffer and stopped, which is the jerk to
+        # zero that dominated a day of testing.
+        #
+        # The error was invisible at the top of a step's range, because the
+        # ceiling clamped the inflated request back to something achievable.
+        # That is why full speed felt smooth while the middle did not, and why
+        # the smooth spot sat exactly where the ceiling started binding.
+        #
+        # Smoothed, and outliers ignored: a loop stall is real elapsed time but
+        # it is not the period, and folding one in would move the estimate for
+        # the rest of the burst.
+        self._tick_ms = float(TICK_MS)
+        self._last_tick_ms = None
 
         # Rolling per-tick history, dumped when a stumble is detected. A 15 s
         # summary cannot show what happens in the 300 ms around a stall, and
@@ -483,6 +752,17 @@ class JogScheduler:
 
     # --- per tick ---------------------------------------------------------
 
+    def _measure_tick(self):
+        """Track how long a tick is really taking. See _tick_ms."""
+        now = time.ticks_ms()
+        if self._last_tick_ms is not None:
+            delta = time.ticks_diff(now, self._last_tick_ms)
+            # A plausible tick only. Below the sleep is impossible, and far
+            # above it is a stall rather than the period.
+            if TICK_MS <= delta <= TICK_MS * 4:
+                self._tick_ms += (delta - self._tick_ms) * TICK_MEASURE_ALPHA
+        self._last_tick_ms = now
+
     def turn_rate(self, detents=0):
         """Detents per second.
 
@@ -513,14 +793,14 @@ class JogScheduler:
 
         if not self._moving:
             if abs(detents) > 1:
-                return abs(detents) / (TICK_MS / 1000.0)
+                return abs(detents) / (self._tick_ms / 1000.0)
             # A lone detent says only that one arrived somewhere in the gap, so
             # the gap is the best estimate - and a deliberate single click for
             # fine positioning stays slow, which is the point.
             ticks = self._ticks_since_motion
             if ticks < 1:
                 ticks = 1
-            return abs(detents) / (ticks * TICK_MS / 1000.0)
+            return abs(detents) / (ticks * self._tick_ms / 1000.0)
 
         total = 0
         for value in self._recent:
@@ -530,8 +810,40 @@ class JogScheduler:
         # a rate lower than the hand is really turning, so the feed dips just
         # after a strong start.
         samples = len(self._recent) or 1
-        seconds = samples * TICK_MS / 1000.0
-        return (total / COUNTS_PER_DETENT) / seconds
+        seconds = samples * self._tick_ms / 1000.0
+        rate = (total / COUNTS_PER_DETENT) / seconds
+
+        # And the same measurement over the last few ticks, which is what
+        # notices a hand winding on before the long window has caught up. See
+        # RATE_ATTACK_TICKS.
+        if RATE_ATTACK_TICKS and samples > RATE_ATTACK_TICKS:
+            attack_total = 0
+            for value in self._recent[-RATE_ATTACK_TICKS:]:
+                attack_total += abs(value)
+            attack_seconds = RATE_ATTACK_TICKS * self._tick_ms / 1000.0
+            attack_detents = attack_total / COUNTS_PER_DETENT
+            attack = attack_detents / attack_seconds
+
+            # The bar this window has to clear, in its own standard deviations.
+            # See RATE_ATTACK_SIGMAS. Floored at the flat margin so a window
+            # holding very few detents cannot ask for less than the minimum.
+            if attack_detents > 0:
+                needed = 1.0 + RATE_ATTACK_SIGMAS / (attack_detents ** 0.5)
+            else:
+                needed = RATE_ATTACK_MARGIN
+            if needed < RATE_ATTACK_MARGIN:
+                needed = RATE_ATTACK_MARGIN
+
+            # Counted rather than decided here and now. This runs once per
+            # tick, from feed_rate.
+            if attack > rate * needed:
+                self._attack_ticks += 1
+            else:
+                self._attack_ticks = 0
+            if self._attack_ticks >= RATE_ATTACK_HOLD_TICKS:
+                rate = attack
+
+        return rate
 
     def set_planner_free(self, free):
         """Record the controller's free planner slots, and learn its capacity.
@@ -558,6 +870,71 @@ class JogScheduler:
         """
         floor = self.step * 60000.0 / MIN_FEED_BLOCK_MS
         return floor if floor > FEED_MIN_MM_MIN else FEED_MIN_MM_MIN
+
+    def _quantum(self, ceiling):
+        """Width of one feed band at the current step. See FEED_BANDS."""
+        return ceiling / FEED_BANDS
+
+    def _snap(self, feed, ceiling):
+        """The band at or below this feed. See FEED_BANDS.
+
+        Rounded DOWN, which is the whole point and is what the grid this
+        replaces got wrong. Rounding to nearest puts the commanded feed above
+        what the hand is supplying about half the time, and that is the starve
+        condition - the machine cannot be fed at a rate the wheel is not
+        producing, so the planner empties and the actual feed collapses.
+        Rounding down inverts the guarantee: inside a band the hand always
+        supplies at least what was asked for, and the surplus is dropped by the
+        emission cap, which is bounded.
+
+        Bounded by the step's own floor and ceiling rather than by the bands.
+        A deliberate single click stays the deliberate rate the step asks for
+        rather than being pulled onto a band that exists for another purpose;
+        the floor is a constant too, and constant is all the planner wants.
+        """
+        quantum = self._quantum(ceiling)
+        if quantum <= 0 or feed <= 0:
+            return feed
+        # At or under the floor there is nothing to band. Rounding the floor
+        # onto a band is the ceiling mistake at the other end of the range - a
+        # bound the bands do not own being rounded through.
+        floor = self.feed_floor()
+        if feed <= floor:
+            return floor if floor <= ceiling else ceiling
+
+        if feed < quantum:
+            # Below the first band there is nothing to round down to but zero,
+            # and collapsing to the floor there would be brutal: at 0.1 mm the
+            # first band is 625 mm/min, which is a brisk turn, so ordinary fine
+            # work would all be commanded at the 60 mm/min floor.
+            #
+            # So the bottom of the range stays continuous, as it was before
+            # banding. That is not a compromise of the idea but a consequence
+            # of what banding is for: it exists to hold F still at traverse
+            # speed, where blocks are short and the planner has to chain them.
+            # Under the first band a block lasts a long time, chaining is not
+            # the constraint, and tracking the hand is worth more than a
+            # constant. It also lands where it matters - at 1 mm the first band
+            # is 33 detents/s, so every real traverse is banded, while a fine
+            # step is only banded if it is being spun hard.
+            return round(feed, 1)
+
+        banded = int(feed / quantum) * quantum
+        # To the precision the wire carries. protocol.jog rounds the feed to a
+        # decimal place, so without this the scheduler holds one number while
+        # the machine is told another - and the emission budget, the drain
+        # estimate and the hysteresis all work from the one that was not sent.
+        banded = round(banded, 1)
+        if banded < floor:
+            # Below the first band, so the floor governs. Not raised to a band:
+            # that would command motion faster than the hand is turning, which
+            # is the very thing rounding down exists to prevent.
+            banded = floor
+        # Last, and absolute. The ceiling is the firmware's own decision about
+        # what a step is for, and nothing here may round through it.
+        if banded > ceiling:
+            banded = ceiling
+        return banded
 
     def feed_rate(self, detents):
         """Feed in mm/min that matches the current winding speed.
@@ -616,7 +993,13 @@ class JogScheduler:
         # the moment the operator starts turning. Smoothing exists to damp
         # jitter during a turn, not to soften its start.
         if not self._moving:
-            return target
+            # Snapped even at a standing start, so a burst opens on the same
+            # grid it will hold. Recorded as the settled value too - the band
+            # below has to measure from something real, and leaving it stale
+            # meant the first comparison of every burst was against the value
+            # the last one ended on.
+            self._settled = self._snap(target, ceiling)
+            return self._settled
 
         # Hold unless the target has left the band; otherwise take it exactly.
         #
@@ -626,10 +1009,18 @@ class JogScheduler:
         # the gap alternately clears and fails the band - a perfect two-cycle
         # that put a different feed on every message and stopped grblHAL
         # blending any of them.
-        if abs(target - self._settled) < self._settled * FEED_DEADBAND:
+        # The band is measured in grid steps rather than as a percentage of
+        # the held value. A relative band is a different amount of wheel at
+        # every feed - widest exactly where the grid is already coarsest - and
+        # it cannot be asymmetric, because rising and falling out of a
+        # proportional band are the same distance by construction.
+        quantum = self._quantum(ceiling)
+        band = (FEED_RISE_BAND_STEPS if target > self._settled
+                else FEED_FALL_BAND_STEPS)
+        if band > 0 and abs(target - self._settled) < quantum * band:
             settled = self._settled
         else:
-            settled = target
+            settled = self._snap(target, ceiling)
         self._settled = settled
 
         # A queue-model trim used to sit here, shading the feed 5% below the
@@ -652,11 +1043,12 @@ class JogScheduler:
     def tick(self):
         """Advance one interval. Returns a message to send, or None."""
         counts = self.encoder.take()
+        self._measure_tick()
 
         # Drain the in-flight estimate by what the machine executes in a tick at
         # the feed last commanded. Done every tick, including idle ones, so the
         # queue empties while the wheel is still.
-        drained = (self.feed / 60.0) * (TICK_MS / 1000.0)
+        drained = (self.feed / 60.0) * (self._tick_ms / 1000.0)
         self._queue_mm -= drained
         if self._queue_mm < 0:
             self._queue_mm = 0.0
@@ -707,6 +1099,7 @@ class JogScheduler:
                 self._direction = 0
                 self._queue_mm = 0.0
                 self._residual = 0
+                self._allow_mm = 0.0
                 self.stats["reversals"] += 1
                 return protocol.jog_cancel()
             self._direction = direction
@@ -801,16 +1194,47 @@ class JogScheduler:
                 # inferring depth from a model - inferring it is what sent
                 # this whole effort chasing the wrong layer for days.
                 cap = self.feed
-            # Rounded, not truncated. Truncating biases every tick downwards,
-            # and the bias is what the planner feels: emitting less than the
-            # drain is exactly how depth is lost. It also lands on values that
-            # should be exact - 900/60 x 0.020 / 0.1 evaluates to
-            # 2.9999999999999996, so asking for three detents allowed two.
+            # Carried, not rounded. What the machine drains in a tick is a
+            # fractional number of detents and emission is a whole one, and at
+            # a steady feed that fraction is the *same* every tick - so
+            # discarding it is not noise that cancels out but a constant bias,
+            # in whichever direction the fraction happens to sit.
             #
-            # Harmless at a 50 ms tick where a detent is a few percent of the
-            # message; at 20 ms the same detent is a third of it.
-            allowed = int((cap / 60.0) * (TICK_MS / 1000.0) / self.step + 0.5)
+            # At 1 mm it sat upwards, and that is the run-on. The ceiling
+            # drains (8000/60) x 27 ms = 3.6 detents and rounding granted 4, so
+            # a saturated turn commanded 11% more than the machine could
+            # execute - every tick, for as long as it was held. 15 mm/s of lag,
+            # 90 mm in a six second burst, which is what the machine measured.
+            #
+            # It is also why the run-ahead bound never caught it. The recovery
+            # branch caps at actual_feed, the machine's own drain rate, and
+            # then rounding put it back up to the same 4 detents: being past
+            # the bound emitted exactly what being under it did, so the bound
+            # had no effect to have. Three separate theories were spent on the
+            # fill above before the arithmetic here was suspected.
+            #
+            # 0.5 mm was fine for no better reason than that its fraction
+            # rounds down (5.4 -> 5), and 0.1 mm likewise. One step ran on and
+            # the others did not because of where a rounding boundary fell.
+            #
+            # Banking the remainder in millimetres makes the long-run rate
+            # exact at every step without truncating any single tick, which is
+            # what the rounding was there to avoid: truncation loses depth,
+            # because emitting less than the drain is how depth is lost.
+            #
+            # The epsilon is the one thing worth keeping from the rounding it
+            # replaces. A budget of exactly three detents is not exactly three:
+            # 900/60 x 0.020 / 0.1 evaluates to 2.9999999999999996, so a hand
+            # turning at precisely the commanded feed had a detent confiscated
+            # every tick. It is a representation error, not a real shortfall,
+            # and a billionth of a detent per tick is far below any bias that
+            # could accumulate into anything.
+            self._allow_mm += (cap / 60.0) * (self._tick_ms / 1000.0)
+            allowed = int(self._allow_mm / self.step + 1e-9)
             if allowed < 1:
+                # Never stop dead on a budget short of a single detent. The
+                # overdraft is charged below, so the rate stays honest across
+                # the ticks that follow rather than being quietly forgiven.
                 allowed = 1
 
             # No bound-based backstop here. One was tried and removed: the bound
@@ -824,6 +1248,25 @@ class JogScheduler:
                 self.stats["dropped_detents"] += abs(detents) - allowed
                 detents = allowed if detents > 0 else -allowed
                 self._residual = 0
+
+            # Charge what actually went out, not what was permitted, so a hand
+            # slower than the cap does not bank credit it never used. Capped at
+            # one detent of it: a slow passage followed by a fast one would
+            # otherwise release the whole accumulated allowance in a single
+            # tick, which is a burst of precisely the queued motion this design
+            # exists to avoid. Negative is left alone - that is the floor above
+            # being repaid.
+            self._allow_mm -= abs(detents) * self.step
+            if self._allow_mm > self.step:
+                self._allow_mm = self.step
+            elif self._allow_mm < -self.step:
+                # Bounded the other way too, so the floor above cannot run up a
+                # debt. Left unbounded, a slow passage that forces a detent per
+                # tick banks arrears that the next fast turn has to pay off
+                # before it may emit anything - which reads as a wheel that
+                # will not start, and starts are already the thing this design
+                # has had to defend most often.
+                self._allow_mm = -self.step
 
             self._queue_mm += abs(detents) * self.step
             self.commanded_mm += detents * self.step
@@ -856,6 +1299,7 @@ class JogScheduler:
                 self._moving = False
                 self._idle_ticks = 0
                 self._direction = 0
+                self._allow_mm = 0.0
                 self.stats["cancels"] += 1
                 return protocol.jog_cancel()
 
@@ -889,7 +1333,7 @@ class JogScheduler:
         # The planner stalls when the queue runs dry, not when a single tick
         # carries less than usual - a dip the buffer absorbs is a non-event, and
         # flagging those would bury the ones that matter.
-        drain = (self.feed / 60.0) * (TICK_MS / 1000.0)
+        drain = (self.feed / 60.0) * (self._tick_ms / 1000.0)
         if self._queue_mm > drain:
             return
 

@@ -34,11 +34,19 @@ def main():
     parser.add_argument("--no-sync", action="store_true")
     args = parser.parse_args()
 
+    # Resolved here rather than passed on as typed. sync_board.py resolves a
+    # board name itself, so a name worked for the sync and was then handed
+    # straight to mpremote for the run, which does not know what "pendant"
+    # means - and reports an unrecognised device as though the port were busy,
+    # which sends you looking for a program holding it. The sync succeeding and
+    # the run failing in the same breath is the tell.
+    device = board.device(args.device)
+
     if not args.no_sync:
         print("syncing board...")
         sync = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "sync_board.py"),
-             "--device", args.device])
+             "--device", device])
         if sync.returncode != 0:
             print("\nsync failed - is the board connected and the port free?")
             print("a pendant already running holds the port; Ctrl-C it first.")
@@ -47,7 +55,7 @@ def main():
     print("\nstarting pendant (Ctrl-C to stop)...\n")
     try:
         return subprocess.run(
-            [sys.executable, "-m", "mpremote", "connect", args.device,
+            [sys.executable, "-m", "mpremote", "connect", device,
              "run", str(ENTRY)]).returncode
     except KeyboardInterrupt:
         print("\nstopped.")
