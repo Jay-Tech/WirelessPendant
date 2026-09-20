@@ -22,6 +22,196 @@ reference every jog constant was fitted against.
 
 New board? → [Setting up a board](#setting-up-a-board). One command.
 
+## The hardware
+
+Three things, and none of them is a breadboard any more: an all-in-one host
+board, a passive PCB that breaks its header out, and a printed enclosure. All of
+it lives under [`hardware/`](hardware/).
+
+| | | |
+|---|---|---|
+| **host board** | bought | [Waveshare ESP32-S3-Touch-LCD-3.5](https://www.waveshare.com/esp32-s3-touch-lcd-3.5.htm?sku=30733) — MCU, display, touch, PMIC and radio on one board |
+| **PSB v1.0** | [`hardware/PendantPcb/`](hardware/PendantPcb/) | breaks that board's 32-pin header out to the handwheel and the three buttons. Carries no components at all |
+| **enclosure** | [`hardware/CADandSTL/`](hardware/CADandSTL/) | Fusion 360 sources and printable STLs — the handheld, and a dock for it |
+
+**The bill of materials is five orderable items, with no passives at all:** the
+host board, an MPG handwheel, three tactile switches, a LiPo cell, and whatever
+the printer eats. A 5 V boost module and the encoder's 22 kΩ divider pair were
+both on that list until 2026-08-15 and were measured off it rather than reasoned
+off it — [platform-decision.md](hardware/platform-decision.md) carries the
+numbers, and [Encoder wiring](#encoder-wiring) below keeps the divider material
+for the Pico build and for characterising an unknown wheel.
+
+### The host board
+
+[Waveshare ESP32-S3-Touch-LCD-3.5](https://www.waveshare.com/esp32-s3-touch-lcd-3.5.htm?sku=30733),
+SKU 30733.
+
+| | |
+|---|---|
+| MCU | ESP32-S3R8, dual Xtensa LX7 @ 240 MHz |
+| Memory | 512 KB SRAM + **8 MB octal PSRAM**, 16 MB flash |
+| Display | 3.5" IPS, 320 x 480, ST7796 over SPI |
+| Touch | FT6336U, I²C `0x38`, polled |
+| Power | **AXP2101** — charger, power path, fuel gauge and power button in one part, switching rather than linear |
+| Battery | 3.7 V LiPo on an MX1.25 header, plus a separate SH1.0 header for an RTC cell |
+| Radio | WiFi 4 (2.4 GHz) + BLE 5 on an onboard antenna, **with an IPEX pad for an external one** |
+| Unused here | PCF85063 RTC, QMI8658 IMU, ES8311 codec, mic, speaker header, TF slot, camera header |
+| Break-out | one 32-pin, 2.54 mm header — which is what PSB v1.0 mates to |
+
+Two of those are why the board won. The **IPEX connector** — reached by
+resoldering one resistor — is worth more on a handheld carried around a steel
+machine than any latency figure measured here, and the Pico 2 W's antenna is
+fixed. The **AXP2101** does in one part what the Pico build needed a LiPo Amigo
+Pro and its wiring to do. The 8 MB PSRAM is enough for a full 320x480x2
+framebuffer, which is also why the committed MicroPython build is the
+`SPIRAM_OCT` variant rather than the plain one — see [ESP32-S3](#esp32-s3).
+
+**The pin map is not in Waveshare's wiki and cannot be read off their schematic
+PDF.** It came from their demo code, examples 08 and 11, which agree — and three
+of the pins turn out not to be pins:
+
+- **The LCD has no chip select.** The panel is permanently selected, so
+  `st7796.py` has to tolerate `cs=None` rather than toggle something that does
+  not exist.
+- **LCD reset is an I²C write**, to a **TCA9554 expander at `0x20`** that is not
+  in the board's advertised feature list and answers writes but not reads. The
+  driver takes a reset *callable* instead of a pin, so the caller supplies either
+  a pin toggle or an expander write and the driver stays portable.
+- **Touch breaks out neither INT nor RST**, and needs neither, being polled.
+
+Everything else transferred intact — the ST7796 init sequence, MADCTL, `INVON`,
+the framebuffer push, and the whole of `screen.py` including the portrait layout,
+the DRO digits, the step grid and the probe page. USB-C sits at the bottom edge,
+which is where the reference pendant puts its cable, so the enclosure works with
+it rather than against it.
+
+An I²C scan of the board reads `0x18` ES8311, `0x20` TCA9554, `0x34` AXP2101,
+`0x38` FT6336U, `0x51` PCF85063, `0x6b` QMI8658. That AXP2101 at `0x34` is also
+how [`setup.py`](tools/setup.py) tells a pendant from a receiver, since the two
+enumerate identically over USB — and it reads the chip ID rather than pinging the
+address, so something else answering there is not mistaken for a battery.
+
+> **The AXP2101's fuel gauge is not to be trusted on this board**, and the
+> pendant does not use it. See [Battery and backlight](#battery-and-backlight)
+> for what it did and what replaced it.
+
+### PSB v1.0 — the breakout PCB
+
+[`hardware/PendantPcb/`](hardware/PendantPcb/) is the KiCad project, with the fab
+output in [`production/`](hardware/PendantPcb/production/).
+[daughter-board.md](hardware/daughter-board.md) is the spec and the argument
+behind it.
+
+It exists because the host board brings almost everything out on that one
+header, so a single mating board reaches every signal the pendant needs. The
+alternative is seven flying leads soldered to a header, in a tool that gets
+carried around a shop.
+
+**Seven signals, and no components.** The move to a 3V3 encoder removed the last
+two resistors it would have carried.
+
+| Net | GPIO | J2 pin | Goes to |
+|---|---|---|---|
+| Encoder A | **9** | 14 | J3 pin 3 — direct, no resistor |
+| Encoder B | **10** | 12 | J3 pin 4 — direct, no resistor |
+| Encoder Vcc | — | 32 | J3 pin 1. **+3V3, measured 3.29 V — not 5 V, not VBAT** |
+| Encoder 0V | — | 4, 30 | J3 pin 2 |
+| `feed_hold` | **38** | 7 | SW1, silkscreened `HOLD` |
+| `cycle_start` | **39** | 9 | SW2, silkscreened `START` |
+| `zero_axis` | **40** | 11 | SW3, silkscreened `ZERO`, long hold |
+
+The GPIO column was measured on the assembled handheld, 2026-08-16, and matches
+`BUTTON_MAP` and `ENCODER_PIN_A/B` in
+[`pendant.py`](micropython/pendant/pendant.py) — which is the authority. If
+either moves, both have to. Buttons are active low against the S3's internal
+pull-ups, with no external pull-ups and no debounce parts;
+[`buttons.py`](micropython/pendant/buttons.py) debounces in software and has done
+since the Pico build.
+
+**Pin 32 is the one worth a meter.** The whole 3V3 encoder decision rests on it
+being a regulated rail: the wheel is open-collector, so its outputs swing to
+whatever supplies it, and they reach GP9 and GP10 with nothing in the way. On
+VBAT or VBUS that is over the S3's ~3.6 V absolute maximum. 3.29 V says it is the
+right rail.
+
+**54.50 x 100.00 mm**, 2 mm chamfers on all four corners, and four drill groups —
+which is the acceptance test, because anything outside the set is then visible at
+a glance:
+
+| Diameter | Plating | Count | |
+|---|---|---|---|
+| 0.300 | PTH | 2 | vias |
+| 1.000 | PTH | 36 | 32 header + 4 encoder |
+| 1.300 | PTH | 6 | three switches, two pads each |
+| 2.200 | NPTH | 6 | mounting |
+
+A missing 1.300 group means the switches were placed after the export — which
+happened, and produced a zip with no buttons on it at all.
+
+Two things on the board are deliberate traps, and both are cheap to check:
+
+- **`+BATT` at J2 pin 1 is a single-node net** — that pad and nothing else on the
+  board. Mate the boards and probe it: battery voltage means the numbering
+  composes correctly through symbol, footprint and placement; 0 V or 3.3 V means
+  one of those three mirrors did not cancel. Safe to probe precisely because
+  nothing else is on it.
+- **J3 has no keying**, and carries 3V3 and GND adjacent to each other. A cable
+  fitted backwards puts reverse polarity across the wheel, so the `+ - A B`
+  silkscreen and the pin 1 mark are load-bearing rather than decorative.
+
+The three switches sit **19.0 mm apart, centred on the board's own centreline**.
+The first layout had them at 19.5 and 18.5 with the middle one 0.5 mm off, and
+unequal spacing between three caps is visible every time once the enclosure is
+on.
+
+A **reverse-polarity guard** for the battery is a second, smaller board —
+[`hardware/ReversePolarityPcb/`](hardware/ReversePolarityPcb/). It shares no net
+with PSB v1.0, which is why it is not on it; see
+[daughter-board.md](hardware/daughter-board.md) for the circuit, what to buy, and
+how to prove it before it meets the host board.
+
+### Printed parts
+
+[`hardware/CADandSTL/`](hardware/CADandSTL/). Each folder holds one Fusion 360
+file and the STLs exported from it — the `.f3d` is the source and the thing to
+edit, the STLs are what a slicer wants. Sizes below are each mesh's measured
+bounding box.
+
+**The handheld** — [`Pendant/`](hardware/CADandSTL/Pendant/), from `Pendant.f3d`:
+
+| File | Size, mm | |
+|---|---|---|
+| `Pendant.stl` | 70.00 x 27.65 x 186.00 | the body |
+| `PcbCover.stl` | 54.70 x 3.16 x 100.00 | closes over PSB v1.0 — the footprint is that board's 54.50 x 100.00 plus clearance |
+| `BatteryCover.stl` | 65.60 x 8.50 x 75.16 | the cell bay |
+| `Button1.stl` | 10.80 x 10.64 x 8.80 | a cap for one of the three switches |
+| `Button3.stl` | 10.80 x 10.64 x 8.80 | same envelope, different geometry |
+| `ButtonUsbV2.stl` | 13.00 x 10.54 x 8.80 | the wider cap |
+| `PowerButton.stl` | 8.39 x 3.60 x 4.60 | reaches the AXP2101's power button through the shell |
+
+**The dock** — [`Mount/`](hardware/CADandSTL/Mount/), from `Mount.f3d`:
+
+| File | Size, mm | |
+|---|---|---|
+| `Mount.stl` | 82.00 x 37.09 x 102.00 | the cradle the pendant sits in |
+| `MountBase.stl` | 82.00 x 37.09 x 10.00 | its base, same footprint |
+| `MountUsb.stl` | 20.00 x 20.00 x 5.90 | carries the USB-C end |
+| `MountUsbLock.stl` | 11.70 x 6.10 x 17.70 | retains it |
+
+**The body is 186 mm in its longest axis**, so it wants a bed with at least that
+much in one direction — a 220 mm printer is fine, a 180 mm one is not.
+
+**The button caps are one dimension chain, not three independent choices.** The
+header fixes PSB v1.0's position relative to the host board in all three axes,
+and the caps have to reach the enclosure top from there — so board stack height,
+switch height and cap height are a single sum. The requirement the caps are cut
+against is that each one **bottoms on the enclosure** at the end of its stroke
+rather than on the switch, so the switch never takes the force of a gloved thumb,
+and that the plunger is guided by a bore in the shell rather than by a spacer
+resting on the board. [daughter-board.md](hardware/daughter-board.md) has the
+reasoning; `Pendant.f3d` is where to check it.
+
 ## Why there is a Pico in here
 
 The project started on a Raspberry Pi Pico 2 W, and that board is still on the
@@ -109,7 +299,9 @@ The manual path, and the reference for what `setup.py` does.
 
 1. Download the Pico 2 W `.uf2` from
    [micropython.org/download/RPI_PICO2_W](https://micropython.org/download/RPI_PICO2_W/)
-   (current release: **v1.28.0**). Make sure it's the `RPI_PICO2_W` build —
+   — take whatever is current there rather than matching the S3 build committed
+   at the root, since the two ports version independently. Make sure it's the
+   `RPI_PICO2_W` build —
    the plain `RPI_PICO2` build has no WiFi and the plain `RPI_PICO_W` build is
    for the older RP2040 board.
 2. Hold **BOOTSEL** while plugging in USB. The board mounts as a drive named
@@ -162,15 +354,17 @@ esptool 5 renamed these from `erase_flash` and `write_flash`; the underscore
 forms still run but print a deprecation warning, which in the middle of a flash
 reads like a fault. `setup.py` picks the spelling from the installed version.
 
-Reset the board and it comes up in MicroPython with a new serial number. Add
-that to `BOARDS` in [`tools/board.py`](tools/board.py): every S3 here enumerates
-identically, so the serial number is the only thing that distinguishes the
-pendant from a receiver, and every tool resolves through that table.
+Reset the board and it comes up in MicroPython with a new serial number. Every
+S3 here enumerates identically, so that serial number is what distinguishes a
+pendant from a receiver, and every tool resolves through it rather than through a
+COM port.
 
-**Building this for the first time?** Every id in `BOARDS` is this bench's, so
-all of them are wrong for you — expect to replace `pendant` and `receiver` with
-your own before any tool here works. `python tools/board.py` lists what is
-attached and says so when the configured board is not among them.
+There are two places it can come from. `setup.py` writes a `device.json` **on the
+board**, which is what lets a board be recognised with no entry in any table —
+prefer that. `BOARDS` in [`tools/board.py`](tools/board.py) is the older path and
+still works; every id in it is this bench's, so all of them are wrong for you.
+`python tools/board.py` lists what is attached and says so when the configured
+board is not among them.
 
 ## Running the smoke test
 
@@ -268,60 +462,78 @@ Six stages, each reporting PASS / FAIL / SKIP with a summary at the end:
 The last three need `secrets.py`; without it they report SKIP and the rest
 still runs, so the script is useful before you've picked a network.
 
+Two of those stages are Pico-shaped: `led` goes through the CYW43 radio chip
+rather than a GPIO, and `temp` reads the RP2350's internal sensor. Both are
+board-level proof of life rather than anything the pendant depends on — on an S3
+the equivalent bring-up is
+[`selftest_board.py`](micropython/pendant/selftest_board.py) and the per-subsystem
+self-tests under [Pendant hardware summary](#pendant-hardware-summary).
+
 ## Pendant hardware summary
 
-Everything the pendant needs, in one place. The reasoning behind each choice is
-in the sections that follow; this is the part you need with a soldering iron in
-your hand.
+Every pin the pendant uses, in one place — the part you want with a soldering
+iron in your hand. Why each one is where it is: [The hardware](#the-hardware)
+above, and the design notes below.
 
-**Discrete parts: two resistors.** Nothing else is needed between the Pico 2 W
-and the peripherals — no level shifters, no pull-ups, no transistors. The
-encoder's 22 kΩ pair is the whole passive BOM, and the touch module does its own
-level conversion on board.
+**Discrete parts: none.** Nothing sits between the host board and the
+peripherals — no level shifters, no pull-ups, no dividers, no transistors. The
+encoder's 22 kΩ pair left with the move to 3V3, and the display and touch panel
+are on the host board rather than wired to it.
 
-| Pin | Net | Notes |
+| GPIO | Net | Notes |
 |---|---|---|
-| GP2 | encoder A | via 22 kΩ to GND — see the encoder section |
-| GP3 | encoder B | via 22 kΩ to GND |
-| GP7 | feed hold | to GND, internal pull-up |
-| GP8 | cycle start | to GND, internal pull-up |
-| GP9 | zero axis | to GND, internal pull-up, long hold |
-| GP10 | CTP_SDA | touch I²C |
-| GP11 | CTP_SCL | touch I²C |
-| GP12 | CTP_INT | read, not used as an interrupt |
-| GP13 | CTP_RST | active low |
-| GP17 | LCD_CS | |
-| GP18 | SCK | shared SPI0 |
-| GP19 | SDI / MOSI | shared SPI0 |
-| GP20 | LCD_RS | the DC line |
-| GP21 | LCD_RST | |
-| GP22 | LED | backlight; leave open and it stays on |
-| VBUS | encoder Vcc, display VCC | **5 V, not 3V3** |
-| GND | encoder 0V, display GND | |
+| GP9 | encoder A | direct, no resistor |
+| GP10 | encoder B | direct, no resistor |
+| GP38 | feed hold | to GND, internal pull-up |
+| GP39 | cycle start | to GND, internal pull-up |
+| GP40 | zero axis | to GND, internal pull-up, long hold |
+| GP1 / GP2 / GP5 | LCD MOSI / MISO / SCK | SPI2, all on the host board |
+| GP3 | LCD DC | |
+| GP6 | LCD backlight | PWM — see [Battery and backlight](#battery-and-backlight) |
+| — | LCD CS | there isn't one; the panel is permanently selected |
+| — | LCD RST | TCA9554 at `0x20`, pin 1 |
+| GP8 / GP7 | I²C SDA / SCL | I2C0 — touch, PMIC, RTC and IMU all share it |
+| **3V3** | encoder Vcc | **not 5 V, not VBAT.** J2 pin 32, measured 3.29 V |
+| GND | encoder 0V | J2 pins 4 and 30 |
 
-Free: **GP0, GP1, GP4–GP6, GP14–GP16, GP26–GP28**. GP4–GP6 came free when axis
-and step selection moved to the touch panel, and GP26–GP28 are the ADC-capable
-ones — the obvious home for a battery divider.
+Deliberately unconnected on PSB v1.0: **J2 pin 2 (VBUS)**, which measures 0 V
+without USB and 4.89 V with, and **J2 pin 31 (3V3)**, a second tap on the rail
+that pin 32 already supplies.
 
-Unconnected on the display module: `SDO/MISO` and `SD_CS`. The pendant never
-reads from the panel and does not use the SD slot.
+Axis and step selection live on the touch panel rather than on buttons. Both are
+bigger targets than a button and, unlike a button, say what is selected without
+being read back off a status line. What stays physical is what has to work
+without looking and while a job is running — feed hold and cycle start are the
+only pendant commands the sender will forward mid-job, and zeroing is a long
+hold because it rewrites the work offset.
 
-**Both peripherals want 5 V.** The encoder is specified at 5 V, and the display
-regulates its own 3.3 V on board — its manual is explicit that feeding it 3.3 V
-leaves that rail short and dims the backlight. Logic stays at 3.3 V throughout:
-the encoder is divided down, and the touch I²C is level converted on the module.
+> **The Pico 2 W map differs in almost every position**, and is kept because that
+> board is still the bench reference. Encoder A/B on **GP2/GP3** through the
+> 22 kΩ dividers; buttons on **GP7/GP8/GP9**; touch on I2C1 — SDA **GP10**, SCL
+> **GP11**, with INT **GP12** and RST **GP13**; display on SPI0 — SCK **GP18**,
+> MOSI **GP19**, DC **GP20**, RST **GP21**, CS **GP17**, backlight **GP22**.
+> There the encoder *and* the display both run from **VBUS at 5 V**, which is the
+> substantive difference: on the S3 the encoder is on the regulated 3V3 and the
+> display is not wired at all. [`pendant.py`](micropython/pendant/pendant.py)
+> carries both maps and picks on the port, so nothing above the pin constants
+> knows which board it got.
 
 **Bringing a rebuilt harness up**, one layer at a time rather than all at once:
 
 ```bash
 python tools/on_board.py micropython/pendant/probe_encoder.py      # characterise A/B
-python tools/on_board.py micropython/pendant/selftest_quadrature.py
+python tools/on_board.py micropython/pendant/selftest_pcnt.py      # the S3 decoder
+python tools/on_board.py micropython/pendant/selftest_quadrature.py # the Pico decoder
 python tools/on_board.py micropython/pendant/selftest_st7796.py    # backlight, then pixels
 python tools/on_board.py micropython/pendant/selftest_touch.py     # bus, then part, then touches
 python tools/on_board.py micropython/pendant/selftest_link.py
 ```
 
-Each separates the failures the one above it would otherwise mask.
+Each separates the failures the one above it would otherwise mask. The decoder
+self-test is per-port: the S3 counts in PCNT hardware, the Pico uses a hard pin
+IRQ, and `pendant.py` chooses between them — a soft IRQ on the ESP32 would sit
+behind the interpreter where a display refresh could hold it off long enough to
+drop edges.
 
 ## Design notes
 
@@ -436,24 +648,17 @@ input-high threshold (~2.15 V) without passing its absolute maximum of
 > divider material above stays for the Pico 2 W build and for characterising an
 > unknown wheel.
 
-A- and B- stay unused. They exist for noise immunity over a long cable; if
-`errors` climbs because the lead runs near a VFD or steppers, feed A/A- and
-B/B- into a 3.3 V RS-422 receiver and take single-ended out.
-
-Erratum E9 is not a factor: the input is driven, not resting on a weak
-pull-down.
-
-Defaults are GP2 = A, GP3 = B.
-
-A- and B- go unused in this arrangement. They exist for noise immunity over a
-long cable; if `errors` starts climbing because the lead runs near a VFD or
-steppers, feed A/A- and B/B- into a 3.3 V RS-422 receiver (MAX3095 or similar)
-and take single-ended 3.3 V out. Not needed for a short bench lead.
+A- and B- go unused. They exist for noise immunity over a long cable; if
+`errors` starts climbing because the lead runs near a VFD or steppers, feed
+A/A- and B/B- into a 3.3 V RS-422 receiver (MAX3095 or similar) and take
+single-ended 3.3 V out. Not needed for a short bench lead, and PSB v1.0's
+4-pin J3 does not land them.
 
 Erratum E9 is not a factor either way here, since the input is actively driven
 rather than resting on a weak pull-down.
 
-Defaults are GP2 = A, GP3 = B.
+Defaults are **GP2 = A, GP3 = B** on the Pico and **GP9 = A, GP10 = B** on the
+ESP32-S3.
 
 **Check before connecting:** power the encoder from 5 V and GND only, and
 measure A against 0V while turning slowly. It should swing hard between ~0 V
@@ -653,11 +858,26 @@ Syncs the board then starts the pendant. Both steps in one because forgetting
 either is silent and misleading: no sync runs stale modules, and no run looks
 exactly like a pendant that is broken rather than one that was never started.
 
-Nothing auto-starts — there is deliberately no `main.py`, so the board always
-boots to a free REPL. Copying `pendant.py` as `main.py` would make it run at
-power-up, but it also holds the REPL from boot, so recovering means catching
-the gap before the script starts or reflashing. Worth an escape hatch (skip
-startup if a button is held) before doing that.
+`run_pendant.py` syncs the modules but not the entry point, so a board driven
+this way still boots to a free REPL. Installing `pendant.py` as `main.py` is a
+separate, deliberate step — `sync_board.py --main` does it, and
+[`setup.py`](tools/setup.py) passes that flag for you, so **a pendant brought up
+by `setup.py` does run at power-up**, which is the point of a pendant.
+
+`main.py` is kept out of the sync's module list on purpose: otherwise every
+development run would also change what the board does when it is next switched
+on. The cost is that a board can sit with every module current and an entry point
+months old — which happened, and ran for weeks with a `main.py` from before the
+battery work while `axp2101.py`, `battery_monitor.py` and `screen.py` were all up
+to date beside it. The panel showed `--` for charge, so it read as a hardware
+fault rather than a stale file. `sync_board.py` now hash-checks the installed
+entry point against `pendant.py` even when it is not installing it, and says when
+the two differ.
+
+The other cost is the REPL: `main.py` holds it from boot, so recovering a board
+that fails inside the pendant means catching the gap before the script starts, or
+reflashing. An escape hatch — skip startup if a button is held — is still worth
+having and does not exist yet.
 
 ### Jog behaviour — open question
 
@@ -755,7 +975,17 @@ tools/                  run from the repo root, never on the board
   replay_pendant.py     re-run a captured session against the jog logic
   test_*.py             host-side tests, no board needed
 
-hardware/               carrier and daughter boards, KiCad plus notes
+hardware/
+  platform-decision.md  why this board and this link, with the measurements
+  daughter-board.md     PSB v1.0: every net, the header mapping, as-built numbers
+  carrier-board.md      the superseded Pico carrier, kept for its mechanical work
+  PendantPcb/           KiCad for PSB v1.0; production/ is the fab output
+  PendantPcbExport/     an export of the above
+  ReversePolarityPcb/   the battery guard, on its own small board
+  CADandSTL/
+    Pendant/              body, covers and button caps - Pendant.f3d plus STLs
+    Mount/                the dock - Mount.f3d plus STLs
+  Outline.dxf Holes.dxf  board geometry out of Fusion, for KiCad to import
 ```
 
 Credentials live in `secrets.py`, which is gitignored — `setup.py` writes it, or
