@@ -2,7 +2,9 @@
 
 Firmware for a wireless handwheel pendant for a grblHAL machine, and for the
 receiver board that carries it to the PC. The sender application it talks to is
-a separate project; what crosses between them is
+a separate project — [Jay-Tech/GrblHAL-Sender](https://github.com/Jay-Tech/GrblHAL-Sender),
+whose [Wireless Pendant](https://github.com/Jay-Tech/GrblHAL-Sender#wireless-pendant)
+section covers the settings at that end. What crosses between them is
 [the wire protocol](micropython/pendant/protocol.py) — newline-delimited JSON,
 the same either way it travels.
 
