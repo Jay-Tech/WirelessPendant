@@ -165,11 +165,11 @@ The first layout had them at 19.5 and 18.5 with the middle one 0.5 mm off, and
 unequal spacing between three caps is visible every time once the enclosure is
 on.
 
-A **reverse-polarity guard** for the battery is a second, smaller board —
-[`hardware/ReversePolarityPcb/`](hardware/ReversePolarityPcb/). It shares no net
-with PSB v1.0, which is why it is not on it; see
-[daughter-board.md](hardware/daughter-board.md) for the circuit, what to buy, and
-how to prove it before it meets the host board.
+A **reverse-polarity guard** for the battery is a second, smaller board. It shares
+no net with PSB v1.0, which is why it is not on it, and
+[daughter-board.md](hardware/daughter-board.md) has the circuit, what to buy, and
+how to prove it before it meets the host board. Its KiCad project is gitignored,
+so that specification is the only copy of it a clone gets.
 
 ### Printed parts
 
@@ -980,13 +980,17 @@ hardware/
   daughter-board.md     PSB v1.0: every net, the header mapping, as-built numbers
   carrier-board.md      the superseded Pico carrier, kept for its mechanical work
   PendantPcb/           KiCad for PSB v1.0; production/ is the fab output
-  PendantPcbExport/     an export of the above
-  ReversePolarityPcb/   the battery guard, on its own small board
   CADandSTL/
     Pendant/              body, covers and button caps - Pendant.f3d plus STLs
     Mount/                the dock - Mount.f3d plus STLs
   Outline.dxf Holes.dxf  board geometry out of Fusion, for KiCad to import
 ```
+
+**Two hardware directories exist on the bench but not in a clone.** `.gitignore`
+excludes the KiCad export (`hardware/PendantPcbExport`) and the reverse-polarity
+guard's own project (`hardware/ReversePolarityPcb/PolarityProtector`), so neither
+travels — the guard's specification in
+[daughter-board.md](hardware/daughter-board.md) is the copy that does.
 
 Credentials live in `secrets.py`, which is gitignored — `setup.py` writes it, or
 copy `secrets.example.py` by hand. The example is tracked, so keep the
