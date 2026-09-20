@@ -103,6 +103,12 @@ output in [`production/`](hardware/PendantPcb/production/).
 [daughter-board.md](hardware/daughter-board.md) is the spec and the argument
 behind it.
 
+**It is built, and the pendant runs on it** — this is a board in service rather
+than a drawing. The only difference between the fabricated boards and what is in
+the repo is the silkscreen: they were made before the `PSB v1.0` version marking
+was added, so they carry the functional labels and no revision. Nothing
+electrical differs.
+
 It exists because the host board brings almost everything out on that one
 header, so a single mating board reaches every signal the pendant needs. The
 alternative is seven flying leads soldered to a header, in a tool that gets

@@ -15,10 +15,17 @@ mating board reaches every signal the pendant needs, and the alternative is
 seven flying leads soldered to a header, in a tool that gets carried around a
 shop.
 
-> **Status: specification, not a built board.** Nothing here has been fabricated.
-> The electrical side is settled and measured; the mechanical side is
-> constrained but not dimensioned, because the enclosure is being drawn in
-> Fusion 360 in parallel and the two have to agree.
+> **Status: built, and in use.** PSB v1.0 was fabricated and the pendant runs on
+> it. The electrical side is settled, measured, and now proven in service.
+>
+> **One difference between the boards in hand and the current design:** they were
+> made before the version marking was added to the silkscreen, so a physical board
+> carries the functional labels but no `PSB v1.0` on it. Nothing electrical
+> differs, and no respin is needed for it - the next batch picks it up.
+>
+> The enclosure it has to agree with is no longer being drawn in parallel; it is
+> in [CADandSTL/](CADandSTL/) as `Pendant.f3d` and its STLs, with `PcbCover.stl`
+> sized to this board.
 
 ## Every net on the board
 
@@ -431,11 +438,16 @@ every time once the enclosure is on.
 A 1.300 group that is missing means the switches were placed after the export -
 which happened, and produced a zip with no buttons on it at all.
 
-**Silkscreen as fabricated:** `ZERO` `START` `HOLD` over the three buttons left
-to right, `+ - A B` against J3 pins 1 to 4, `+BATT` at J2 pin 1, and `PSB v1.0`.
-Each label was checked against its pad's coordinates rather than by eye, because
-`A` and `B` were briefly attached to the wrong nets and the silkscreen would
-have inherited it.
+**Silkscreen:** `ZERO` `START` `HOLD` over the three buttons left to right,
+`+ - A B` against J3 pins 1 to 4, `+BATT` at J2 pin 1, and `PSB v1.0`. Each label
+was checked against its pad's coordinates rather than by eye, because `A` and `B`
+were briefly attached to the wrong nets and the silkscreen would have inherited
+it.
+
+**All of that is on the boards in use except `PSB v1.0`**, which went into the
+design after they were fabricated. It is the only difference between a board in
+hand and this repo, so a board with labelled buttons and an unlabelled revision
+is the first batch rather than a board with something missing.
 
 ## The header mapping, verified against the pendant
 
@@ -498,8 +510,13 @@ cannot be added later.
 
 ### Silkscreen the board needs
 
-There is currently no free text on it at all - only reference designators and
-values. Nothing is mislabelled, but nothing is labelled either.
+> **Done, and kept as the checklist it was.** This was written when the board had
+> no free text at all, and everything on the list reached the design - see the
+> silkscreen note under "As built - PSB v1.0" above for what is on it. The last
+> item is the
+> one that landed late: the version marking went in after the first batch was
+> fabricated, which is why the boards in use carry every label below except their
+> own revision.
 
 - **J3 pin 1 and its four signals**, per above. The one with a damage path.
 - **Button functions** - `HOLD` / `START` / `ZERO`, left to right that is
